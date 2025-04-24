@@ -1,4 +1,5 @@
 package com.nicholas.wavecraft.debug;
+import com.nicholas.wavecraft.sound.SoundTracker;
 
 import com.mojang.math.Axis;
 import net.minecraft.client.gui.Font;
@@ -7,6 +8,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -20,6 +22,8 @@ import net.minecraft.client.renderer.debug.DebugRenderer;
 import net.minecraft.network.chat.Component;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
+
+import java.util.List;
 
 @Mod.EventBusSubscriber(modid = "wavecraft", value = Dist.CLIENT)
 public class SoundDebugger {
@@ -54,16 +58,38 @@ public class SoundDebugger {
                 }
             }
         }
+        //BlockPos test = Minecraft.getInstance().player.blockPosition().above(2);
+        //renderLabel(poseStack, buffer, test, "DEBUG TEXT");
+        //System.out.println("[DEBUG] Forced test label at player position.");
 
-        buffer.endBatch(RenderType.text(new ResourceLocation("minecraft", "textures/font/ascii.png")));
-
+        //buffer.endBatch(RenderType.text(new ResourceLocation("minecraft", "textures/font/ascii.png")));
+        buffer.endBatch();
 
     }
 
     private static double getSPLAtBlock(BlockPos pos, Level level) {
-        // TODO: Implementa tu cálculo aquí. Por ahora, devuelve un ejemplo:
-        return Math.random() < 0.005 ? 60 + Math.random() * 30 : 0;
+        Vec3 blockPos = new Vec3(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+        List<SoundTracker.ActiveSound> sources = SoundTracker.getCurrentSounds();
+
+        double totalIntensity = 0;
+        double referencePower = 1e-12; // en W/m^2, referencia para 0 dB
+
+        for (SoundTracker.ActiveSound sound : sources) {
+            double distanceSq = sound.position.distanceToSqr(blockPos);
+            if (distanceSq < 1) distanceSq = 1; // evita división por cero
+
+            // Potencia proporcional al volumen, inverso al cuadrado de la distancia
+            double intensity = (sound.volume * sound.volume) / distanceSq;
+            totalIntensity += intensity;
+        }
+
+        if (totalIntensity == 0) return 0;
+
+        double spl = 10 * Math.log10(totalIntensity / referencePower);
+        System.out.println("[SPL] Sources count: " + sources.size());
+        return spl;
     }
+
 
     private static void renderLabel(PoseStack poseStack, MultiBufferSource buffer, BlockPos pos, String text) {
         Minecraft mc = Minecraft.getInstance();
@@ -73,33 +99,39 @@ public class SoundDebugger {
         double camY = mc.getCameraEntity().getY();
         double camZ = mc.getCameraEntity().getZ();
 
+        // Posición del texto
         float x = (float)(pos.getX() + 0.5 - camX);
         float y = (float)(pos.getY() + 0.5 - camY);
         float z = (float)(pos.getZ() + 0.5 - camZ);
 
+
         poseStack.pushPose();
         poseStack.translate(x, y, z);
-        poseStack.scale(0.02f, 0.02f, 0.02f);  // Escala para que no sea gigante
+        poseStack.mulPose(mc.getEntityRenderDispatcher().cameraOrientation());
+        poseStack.scale(-0.025f, -0.025f, 0.025f); // inverso para que no salga del revés
 
-        Quaternionf rotation = mc.getEntityRenderDispatcher().cameraOrientation();
-        poseStack.mulPose(rotation);
-        poseStack.mulPose(Axis.YP.rotationDegrees(180)); // Para que no se vea al revés
+        // Fondo negro translúcido detrás del texto
+        Matrix4f matrix = poseStack.last().pose();
+        float backgroundOpacity = 0.25f;
+        int backgroundColor = (int)(255 * backgroundOpacity) << 24;
 
         font.drawInBatch(
                 text,
                 -font.width(text) / 2f,
                 0,
-                0xFFFFFF,         // color blanco
+                0xFFFFFF,
                 false,
                 poseStack.last().pose(),
                 buffer,
-                Font.DisplayMode.NORMAL,
+                Font.DisplayMode.NORMAL, // <- ESTE
                 0,
                 LightTexture.FULL_BRIGHT
         );
 
+
         poseStack.popPose();
     }
+
     /*private static void renderLabel(BlockPos pos, String text) {
         Minecraft mc = Minecraft.getInstance();
 
