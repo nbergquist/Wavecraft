@@ -1,5 +1,6 @@
 package com.nicholas.wavecraft.sound;
 
+import com.nicholas.wavecraft.debug.SoundDebugger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.sounds.SoundSource;
@@ -9,6 +10,9 @@ import net.minecraftforge.client.event.sound.PlaySoundEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.client.event.sound.PlaySoundSourceEvent;
+
+
 
 import java.util.*;
 
@@ -31,18 +35,30 @@ public class SoundTracker {
     private static final long MAX_LIFETIME_MS = 2000; // mantener sonidos 2s
 
     @SubscribeEvent
-    public static void onSoundPlayed(PlaySoundEvent event) {
+    public static void onSoundSourcePlayed(PlaySoundSourceEvent event) {
+        if (Minecraft.getInstance().level == null) {
+            System.out.println("[DEBUG] Ignorando sonido (no hay mundo cargado)");
+            return;
+        }
+
         SoundInstance sound = event.getSound();
-        if (sound == null || sound.getSound() == null || sound.getSource() == SoundSource.MASTER) return;
+        if (sound == null) return;
 
         Vec3 pos = new Vec3(sound.getX(), sound.getY(), sound.getZ());
         float vol = sound.getVolume();
 
-        if (vol > 0.01f) {
-            activeSounds.add(new ActiveSound(pos, vol));
+        if (vol > 0.01f && SoundDebugger.rayEmissionEnabled) {
+            AcousticRayManager.emitRays(pos);
+
+            System.out.println("[SoundTracker] ✅ Capturado: " +
+                    sound.getLocation() +
+                    " en " + pos +
+                    " | volumen=" + vol);
         }
-        System.out.println("[SoundTracker] Captured sound: " + sound.getLocation() + " at " + sound.getX() + ", " + sound.getY() + ", " + sound.getZ() + " | volume=" + vol);
+
     }
+
+
 
     @SubscribeEvent
     public static void onClientTick(TickEvent.ClientTickEvent event) {
