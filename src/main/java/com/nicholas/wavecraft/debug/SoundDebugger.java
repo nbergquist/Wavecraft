@@ -187,34 +187,24 @@ public class SoundDebugger {
                 List<Vec3> segments = ray.getPathSegments();
                 float maxDistance = ray.getDistanceTraveled(currentTick);
                 float cumulative = 0;
-                int reflectionIndex = ray.bounces;
 
                 if (segments.size() == 1) {
                     if (SoundDebugger.renderRaysDebugMode) {
                         Vec3 p = segments.get(0);
-                        renderRaySegment(poseStack, p, p.add(0.2, 0, 0), camPos, reflectionIndex);
+                        renderRaySegment(poseStack, p, p.add(0.2, 0, 0), camPos);
                     }
                     continue;
                 }
 
-                int localBounce = 0;
-                Vec3 lastDir = null;
-
                 for (int i = 0; i < segments.size() - 1; i++) {
                     Vec3 from = segments.get(i);
                     Vec3 to = segments.get(i + 1);
-                    Vec3 currentDir = to.subtract(from).normalize();
-
-                    if (lastDir != null && currentDir.dot(lastDir) < 0.99) {
-                        localBounce++;
-                    }
-
                     float segmentLength = (float) from.distanceTo(to);
+
                     if (cumulative + segmentLength > maxDistance) break;
 
-                    renderRaySegment(poseStack, from, to, camPos, localBounce);
+                    renderRaySegment(poseStack, from, to, camPos);
                     cumulative += segmentLength;
-                    lastDir = currentDir;
                 }
             }
         }
@@ -245,7 +235,7 @@ public class SoundDebugger {
         }
     }
 
-    private static void renderRaySegment(PoseStack poseStack, Vec3 start, Vec3 end, Vec3 camPos, int ReflectionIndex) {
+    private static void renderRaySegment(PoseStack poseStack, Vec3 start, Vec3 end, Vec3 camPos) {
         Minecraft mc = Minecraft.getInstance();
         MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
         VertexConsumer buffer = bufferSource.getBuffer(RenderType.LINES);
@@ -259,39 +249,15 @@ public class SoundDebugger {
         double ez = end.z - camPos.z;
 
         Matrix4f matrix = poseStack.last().pose();
-        switch (ReflectionIndex) {
-            case 0:
-                buffer.vertex(matrix, (float)sx, (float)sy, (float)sz)
-                        .color(255, 0, 0, 255)
-                        .normal(0, 1, 0) // dummy normal
-                        .endVertex();
-                buffer.vertex(matrix, (float)ex, (float)ey, (float)ez)
-                        .color(255, 0, 0, 255)
-                        .normal(0, 1, 0)
-                        .endVertex();
-                break;
-            case 1:
-                buffer.vertex(matrix, (float)sx, (float)sy, (float)sz)
-                        .color(255, 255, 0, 255)
-                        .normal(0, 1, 0) // dummy normal
-                        .endVertex();
-                buffer.vertex(matrix, (float)ex, (float)ey, (float)ez)
-                        .color(255, 255, 0, 255)
-                        .normal(0, 1, 0)
-                        .endVertex();
-                break;
-            default:
-                buffer.vertex(matrix, (float)sx, (float)sy, (float)sz)
-                        .color(0, 255, 0, 255)
-                        .normal(0, 1, 0) // dummy normal
-                        .endVertex();
-                buffer.vertex(matrix, (float)ex, (float)ey, (float)ez)
-                        .color(0, 255, 0, 255)
-                        .normal(0, 1, 0)
-                        .endVertex();
-                break;
-        }
 
+        buffer.vertex(matrix, (float)sx, (float)sy, (float)sz)
+                .color(255, 0, 0, 255)
+                .normal(0, 1, 0) // dummy normal
+                .endVertex();
+        buffer.vertex(matrix, (float)ex, (float)ey, (float)ez)
+                .color(255, 0, 0, 255)
+                .normal(0, 1, 0)
+                .endVertex();
     }
 
 

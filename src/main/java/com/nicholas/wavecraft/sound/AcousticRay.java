@@ -13,7 +13,7 @@ public class AcousticRay {
     private Vec3 currentPosition;
     private Vec3 currentDirection;
     private float intensity;
-    public int bounces;
+    private int bounces;
     private long tickLaunched;
     private long lastUpdatedTick;
     private float propagationSpeed; // m/s

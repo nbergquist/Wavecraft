@@ -24,10 +24,6 @@ public class AcousticRayManager {
         return numRays;
     }
 
-    public static List<AcousticRay> getActiveRays() {
-        return new ArrayList<>(activeRays);
-    }
-
     public static void setNumRays(int rays) {
         numRays = rays;
     }
@@ -75,6 +71,12 @@ public class AcousticRayManager {
 
         //System.out.println("[EMIT] Total rayos activos: " + activeRays.size());
     }
+
+
+    public static List<AcousticRay> getActiveRays() {
+        return new ArrayList<>(activeRays); // devuelve copia segura
+    }
+
 
     private static Vec3 randomDirection() {
         // Puedes mejorar esto para direcciones uniformes esféricamente
