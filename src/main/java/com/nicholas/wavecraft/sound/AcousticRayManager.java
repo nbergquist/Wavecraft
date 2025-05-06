@@ -2,6 +2,7 @@ package com.nicholas.wavecraft.sound;
 
 import com.nicholas.wavecraft.debug.SoundDebugger;
 import net.minecraft.client.Minecraft;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
@@ -11,6 +12,9 @@ import java.util.List;
 
 public class AcousticRayManager {
     private static final List<AcousticRay> activeRays = new ArrayList<>();
+    public static final List<RayImpulseCapture> impulseLeft = new ArrayList<>();
+    public static final List<RayImpulseCapture> impulseRight = new ArrayList<>();
+
 
     private static float soundSpeed = 343.0f;
 
@@ -55,7 +59,7 @@ public class AcousticRayManager {
 
 
 
-    public static void emitRays(Vec3 sourcePos) {
+    public static void emitRays(Vec3 sourcePos, ResourceLocation soundId) {
         if (Minecraft.getInstance().level == null) {
             System.out.println("[WARN] No hay mundo cargado. Ignorando emisión de rayos.");
             return;
@@ -66,7 +70,7 @@ public class AcousticRayManager {
         for (int i = 0; i < numRays; i++) {
             Vec3 dir = randomDirection();
             Vec3 safeStart = sourcePos.add(dir.normalize().scale(0.05)); // desplazamiento fuera del bloque
-            AcousticRay ray = new AcousticRay(safeStart, dir, 1.0f);
+            AcousticRay ray = new AcousticRay(safeStart, dir, 1.0f, soundId, sourcePos);
 
             ray.setPropagationSpeed(soundSpeed);
             ray.launchAtTick(SoundDebugger.currentTick);

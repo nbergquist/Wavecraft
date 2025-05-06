@@ -48,7 +48,7 @@ public class SoundTracker {
         float vol = sound.getVolume();
 
         if (vol > 0.01f && SoundDebugger.rayEmissionEnabled) {
-            AcousticRayManager.emitRays(pos);
+            AcousticRayManager.emitRays(pos, sound.getLocation());
 
             System.out.println("[SoundTracker] ✅ Capturado: " +
                     sound.getLocation() +
