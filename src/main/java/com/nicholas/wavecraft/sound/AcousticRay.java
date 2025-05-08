@@ -22,23 +22,22 @@ public class AcousticRay {
     private int bounces;
     private long tickLaunched;
     private long lastUpdatedTick;
-    private float propagationSpeed; // m/s
+    private float propagationSpeed;
     private float distanceAccumulator = 0;
 
     private final List<Integer> bounceIndices = new ArrayList<>();
-
     private final List<Vec3> path = new ArrayList<>();
     private static final float STEP_LENGTH = 1.0f;
     private static final int MAX_BOUNCES = 10;
-    private static final float MAX_DISTANCE = 500.0f;
+    private static final float MAX_DISTANCE = 400.0f;
     private final ResourceLocation soundId;
     private final Vec3 sourcePos;
 
     private float distanceSinceLastBounce = 0;
-    private static final float MAX_NO_REFLECTION_DISTANCE = 1000.0f;
-
-
+    private static final float MAX_NO_REFLECTION_DISTANCE = 300.0f;
     private float totalDistance = 0;
+
+    private boolean directImpulseAdded = false;
 
     public AcousticRay(Vec3 start, Vec3 direction, float intensity,
                        ResourceLocation soundId, Vec3 sourcePos) {
@@ -55,13 +54,12 @@ public class AcousticRay {
 
     public void launchAtTick(long tick) {
         this.tickLaunched = tick;
-        this.lastUpdatedTick = tick - 1; // ⚠️ Forzar que en el primer tick haya avance
+        this.lastUpdatedTick = tick - 1;
     }
 
     public void setPropagationSpeed(float speed) {
-        this.propagationSpeed = Math.max(speed, 0.01f); // 👈 Nunca menos de 0.01 m/s
+        this.propagationSpeed = Math.max(speed, 0.01f);
     }
-
 
     public List<Vec3> getPathSegments() {
         return path;
@@ -87,98 +85,80 @@ public class AcousticRay {
         distanceAccumulator += propagationSpeed * seconds;
         lastUpdatedTick = currentTick;
 
-        while (distanceAccumulator >= STEP_LENGTH && bounces < MAX_BOUNCES && totalDistance < MAX_DISTANCE && distanceSinceLastBounce < MAX_NO_REFLECTION_DISTANCE) {
+        while (distanceAccumulator >= STEP_LENGTH &&
+                bounces < MAX_BOUNCES &&
+                totalDistance < MAX_DISTANCE &&
+                distanceSinceLastBounce < MAX_NO_REFLECTION_DISTANCE) {
+
             Vec3 nextPos = currentPosition.add(currentDirection.scale(STEP_LENGTH));
 
-            // === ⬇️ DETECCIÓN Y REGISTRO DE IMPACTO CON PLANOS DEL JUGADOR ⬇️ ===
-            boolean hitPlane = false;
+            if (bounces > 0) {
+                LocalPlayer player = Minecraft.getInstance().player;
+                if (player != null) {
+                    Vec3 headPos = player.getEyePosition();
+                    Vec3 rightVec = player.getLookAngle().cross(new Vec3(0, 1, 0)).normalize();
+                    float half = SoundDebugger.dimensions / 2.0f;
 
-            LocalPlayer player = Minecraft.getInstance().player;
-            if (player == null) break;  // por seguridad en servidores
-
-            Vec3 headPos = player.getEyePosition();
-            Vec3 rightVec = player.getLookAngle().cross(new Vec3(0, 1, 0)).normalize();
-            float half = SoundDebugger.dimensions / 2.0f;
-
-            Map<RayImpulseCapture.Plane, Vec3> normals = Map.of(
-                    RayImpulseCapture.Plane.XY, new Vec3(0, 0, 1),
-                    RayImpulseCapture.Plane.XZ, new Vec3(0, 1, 0),
-                    RayImpulseCapture.Plane.YZ, new Vec3(1, 0, 0)
-            );
-
-            for (var e : normals.entrySet()) {
-                if (hitPlane) break;
-                RayImpulseCapture.Plane plane = e.getKey();
-                Vec3 normal = e.getValue();
-
-                Vec3 hit = intersectSegmentWithPlane(currentPosition, nextPos, headPos, normal);
-                if (hit == null) continue;
-                Vec3 offset = hit.subtract(headPos);
-                if (Math.max(Math.max(Math.abs(offset.x), Math.abs(offset.y)), Math.abs(offset.z)) > half) continue;
-
-
-                double distSrc = sourcePos.distanceTo(hit);
-                float tSec = (float) (distSrc / propagationSpeed);
-                int bnc = this.bounces;
-                float attenuation = 1.0f; // para el futuro
-
-                double distHead = hit.distanceTo(headPos);
-
-                boolean isRightEar;
-                float weight;
-                if (plane == RayImpulseCapture.Plane.XZ) {
-                    isRightEar = (hit.x() > headPos.x());
-                    weight = 1f;
-                } else {
-                    double dot = rightVec.dot(hit.subtract(headPos));
-                    float norm = (float) ((dot / half) * 0.5 + 0.5);
-                    weight = Math.min(1f, Math.max(0f, norm));
-                    isRightEar = true; // se asignará a ambos luego
-                }
-
-                var cap = new RayImpulseCapture(
-                        this.soundId,
-                        this.sourcePos,
-                        distSrc,
-                        hit,
-                        distHead,
-                        tSec,
-                        bnc,
-                        attenuation,
-                        plane,
-                        weight,
-                        plane == RayImpulseCapture.Plane.XZ ? isRightEar : true
-                );
-
-                if (plane == RayImpulseCapture.Plane.XZ) {
-                    if (isRightEar) AcousticRayManager.impulseRight.add(cap);
-                    else AcousticRayManager.impulseLeft.add(cap);
-                } else {
-                    var capL = new RayImpulseCapture(
-                            cap.soundId(), cap.sourcePos(), cap.distanceFromSource(),
-                            cap.hitPos(), cap.distanceToHead(), cap.timeSeconds(), cap.bounceCount(),
-                            cap.totalAttenuation(), cap.plane(), 1 - cap.weight(), false
+                    Map<RayImpulseCapture.Plane, Vec3> normals = Map.of(
+                            RayImpulseCapture.Plane.XY, new Vec3(0, 0, 1),
+                            RayImpulseCapture.Plane.XZ, new Vec3(0, 1, 0),
+                            RayImpulseCapture.Plane.YZ, new Vec3(1, 0, 0)
                     );
-                    var capR = cap;
-                    AcousticRayManager.impulseLeft.add(capL);
-                    AcousticRayManager.impulseRight.add(capR);
+
+                    for (var e : normals.entrySet()) {
+                        RayImpulseCapture.Plane plane = e.getKey();
+                        Vec3 normal = e.getValue();
+
+                        Vec3 hit = intersectSegmentWithPlane(currentPosition, nextPos, headPos, normal);
+                        if (hit == null) continue;
+                        Vec3 offset = hit.subtract(headPos);
+                        if (Math.max(Math.max(Math.abs(offset.x), Math.abs(offset.y)), Math.abs(offset.z)) > half) continue;
+
+                        double distSrc = sourcePos.distanceTo(hit);
+                        float tSec = (float) (distSrc / propagationSpeed);
+                        float attenuation = 1.0f;
+                        int bnc = this.bounces;
+                        double distHead = hit.distanceTo(headPos);
+
+                        Vec3 toSource = sourcePos.subtract(headPos).normalize();
+                        Vec3 look     = player.getLookAngle();
+                        Vec3 rightEar = look.cross(new Vec3(0,1,0)).normalize();
+                        Vec3 leftEar  = rightEar.scale(-1);
+
+                        float angAttR = getAngularAttenuation(toSource, rightEar);
+                        float angAttL = getAngularAttenuation(toSource, leftEar);
+
+                        float offsetFactor = 0.1f;
+                        double cosR = Math.max(0f, rightEar.dot(toSource));
+                        double cosL = Math.max(0f, leftEar .dot(toSource));
+
+                        float weightR = (float) ((offsetFactor + (1 - offsetFactor) * cosR) * angAttR);
+                        float weightL = (float) ((offsetFactor + (1 - offsetFactor) * cosL) * angAttL);
+
+                        var capR = new RayImpulseCapture(
+                                soundId, sourcePos, distSrc, hit, distHead,
+                                tSec, bnc, attenuation,
+                                plane, weightR, true
+                        );
+                        var capL = new RayImpulseCapture(
+                                soundId, sourcePos, distSrc, hit, distHead,
+                                tSec, bnc, attenuation,
+                                plane, weightL, false
+                        );
+
+                        AcousticRayManager.impulseRight.add(capR);
+                        AcousticRayManager.impulseLeft.add(capL);
+
+                        if (SoundDebugger.renderCollisionPlanes) {
+                            String msg = String.format(
+                                    "[Wavecraft] %s \u23F1%.3fs dist=%.2fm refl=%d plano=%s head=%.2fm",
+                                    soundId.toString(), tSec, distSrc, bnc, plane, distHead
+                            );
+                            player.displayClientMessage(Component.literal(msg), false);
+                        }
+                    }
                 }
-
-                String msg = String.format(
-                        "[Wavecraft] %s ⏱%.3fs dist=%.2fm refl=%d plano=%s head=%.2fm",
-                        cap.soundId().toString(),
-                        cap.timeSeconds(),
-                        cap.distanceFromSource(),
-                        cap.bounceCount(),
-                        cap.plane(),
-                        cap.distanceToHead()
-                );
-                player.displayClientMessage(Component.literal(msg), false);
-                hitPlane = true;
             }
-
-            //if (hitPlane) return false;
-            // === ⬆️ FIN BLOQUE DE COLISIÓN CON PLANOS DEL JUGADOR ⬆️ ===
 
             BlockHitResult hit = world.clip(new net.minecraft.world.level.ClipContext(
                     currentPosition,
@@ -224,7 +204,6 @@ public class AcousticRay {
         return bounces < MAX_BOUNCES && totalDistance < MAX_DISTANCE && distanceSinceLastBounce < MAX_NO_REFLECTION_DISTANCE;
     }
 
-
     private boolean isReflectiveBlock(Level world, BlockPos pos) {
         return world.getBlockState(pos).isCollisionShapeFullBlock(world, pos);
     }
@@ -232,7 +211,7 @@ public class AcousticRay {
     private Vec3 intersectSegmentWithPlane(Vec3 p0, Vec3 p1, Vec3 planePoint, Vec3 normal) {
         Vec3 dir = p1.subtract(p0);
         double denom = dir.dot(normal);
-        if (Math.abs(denom) < 1e-6) return null; // paralelo
+        if (Math.abs(denom) < 1e-6) return null;
 
         double t = (planePoint.subtract(p0)).dot(normal) / denom;
         if (t >= 0 && t <= 1) {
@@ -243,5 +222,9 @@ public class AcousticRay {
 
     private Vec3 reflect(Vec3 incoming, Vec3 normal) {
         return incoming.subtract(normal.scale(2 * incoming.dot(normal))).normalize();
+    }
+
+    private static float getAngularAttenuation(Vec3 toSource, Vec3 earDir) {
+        return 1.0f;
     }
 }
