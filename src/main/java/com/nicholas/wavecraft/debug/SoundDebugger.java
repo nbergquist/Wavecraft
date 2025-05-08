@@ -50,7 +50,7 @@ public class SoundDebugger {
     public static boolean renderRaysDebugMode = false;
 
     public static boolean renderCollisionPlanes = false;
-    public static float dimensions = 20.0f;
+    public static float dimensions = 5.0f;
 
 
     @SubscribeEvent
