@@ -3,6 +3,7 @@ package com.nicholas.wavecraft.sound;
 import com.nicholas.wavecraft.debug.SoundDebugger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.sounds.SoundInstance;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
@@ -24,6 +25,8 @@ public class SoundTracker {
         public final float volume;
         public final long timestamp;
 
+
+
         public ActiveSound(Vec3 pos, float vol) {
             this.position = pos;
             this.volume = vol;
@@ -32,6 +35,7 @@ public class SoundTracker {
     }
 
     private static final List<ActiveSound> activeSounds = new ArrayList<>();
+    public static final Map<ResourceLocation, Float> lastKnownPitches = new HashMap<>();
     private static final long MAX_LIFETIME_MS = 2000; // mantener sonidos 2s
 
     @SubscribeEvent
@@ -44,10 +48,17 @@ public class SoundTracker {
         SoundInstance sound = event.getSound();
         if (sound == null) return;
 
+        if (sound instanceof ReflectedSoundInstance) return;
+
         Vec3 pos = new Vec3(sound.getX(), sound.getY(), sound.getZ());
         float vol = sound.getVolume();
 
         if (vol > 0.01f && SoundDebugger.rayEmissionEnabled) {
+            if (sound.getLocation().getPath().startsWith("reflected_")) return;  // Ignorar sonidos de la convolución
+
+            float pitch = sound.getPitch();
+            SoundTracker.lastKnownPitches.put(sound.getLocation(), pitch);
+
             AcousticRayManager.emitRays(pos, sound.getLocation());
 
             System.out.println("[SoundTracker] ✅ Capturado: " +
@@ -59,15 +70,18 @@ public class SoundTracker {
     }
 
 
-
     @SubscribeEvent
     public static void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
+
         long now = System.currentTimeMillis();
         activeSounds.removeIf(s -> now - s.timestamp > MAX_LIFETIME_MS);
-    }
 
-    public static List<ActiveSound> getCurrentSounds() {
-        return new ArrayList<>(activeSounds);
+        // Procesar los impulsos
+        if (Minecraft.getInstance().level != null) {
+            long currentTick = Minecraft.getInstance().level.getGameTime();
+            ConvolutionManager.tick(currentTick);
+        }
     }
 }
+

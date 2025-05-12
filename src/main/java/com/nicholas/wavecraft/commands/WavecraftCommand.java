@@ -81,6 +81,16 @@ public class WavecraftCommand {
                                     return 1;
                                 })
                         )
+                        .then(Commands.literal("enableRays")
+                                .executes(ctx -> {
+                                    SoundDebugger.rayEmissionEnabled = !SoundDebugger.rayEmissionEnabled;
+                                    ctx.getSource().sendSuccess(() ->
+                                            SoundDebugger.rayEmissionEnabled ?
+                                                    Component.literal("Cálculo de rayos activado") :
+                                                    Component.literal("Cálculo de rayos desactivado"), true);
+                                    return 1;
+                                })
+                        )
 
 
         );

@@ -7,6 +7,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 
@@ -38,20 +39,14 @@ public class AcousticRayManager {
     }
 
     public static void tick(Level level, long currentTick) {
-        // Copiar la lista para evitar errores si se modifica mientras iteramos
-        List<AcousticRay> raysCopy = new ArrayList<>(activeRays);
-        List<AcousticRay> toRemove = new ArrayList<>();
-
-        for (AcousticRay ray : raysCopy) {
+        Iterator<AcousticRay> it = activeRays.iterator();
+        while (it.hasNext()) {
+            AcousticRay ray = it.next();
             boolean alive = ray.update(level, currentTick);
-            if (!alive) {
-                toRemove.add(ray);
-            }
+            if (!alive) it.remove();
         }
-
-        // Eliminar todos los rayos que han terminado
-        activeRays.removeAll(toRemove);
     }
+
 
 
 
@@ -65,13 +60,14 @@ public class AcousticRayManager {
         //long currentTick = Minecraft.getInstance().level.getGameTime();
 
         for (int i = 0; i < numRays; i++) {
-            if (activeRays.size() >= MAX_RAYS) {
+            if (activeRays.size() < MAX_RAYS) {
                 Vec3 dir = randomDirection();
                 Vec3 safeStart = sourcePos.add(dir.normalize().scale(0.05)); // desplazamiento fuera del bloque
-                AcousticRay ray = new AcousticRay(safeStart, dir, 1.0f, soundId, sourcePos);
+                AcousticRay ray = new AcousticRay(sourcePos, dir, 1f, soundId, sourcePos, SoundDebugger.currentTick);
+                activeRays.add(ray);
 
                 ray.setPropagationSpeed(soundSpeed);
-                ray.launchAtTick(SoundDebugger.currentTick);
+                //ray.launchAtTick(SoundDebugger.currentTick);
                 activeRays.add(ray);
             }
         }
