@@ -23,6 +23,7 @@ public class AcousticRayManager {
     }
 
     private static int numRays = 200;
+    private static final int MAX_RAYS = 10000;
 
     public static int getNumRays() {
         return numRays;
@@ -64,13 +65,15 @@ public class AcousticRayManager {
         //long currentTick = Minecraft.getInstance().level.getGameTime();
 
         for (int i = 0; i < numRays; i++) {
-            Vec3 dir = randomDirection();
-            Vec3 safeStart = sourcePos.add(dir.normalize().scale(0.05)); // desplazamiento fuera del bloque
-            AcousticRay ray = new AcousticRay(safeStart, dir, 1.0f, soundId, sourcePos);
+            if (activeRays.size() >= MAX_RAYS) {
+                Vec3 dir = randomDirection();
+                Vec3 safeStart = sourcePos.add(dir.normalize().scale(0.05)); // desplazamiento fuera del bloque
+                AcousticRay ray = new AcousticRay(safeStart, dir, 1.0f, soundId, sourcePos);
 
-            ray.setPropagationSpeed(soundSpeed);
-            ray.launchAtTick(SoundDebugger.currentTick);
-            activeRays.add(ray);
+                ray.setPropagationSpeed(soundSpeed);
+                ray.launchAtTick(SoundDebugger.currentTick);
+                activeRays.add(ray);
+            }
         }
 
         //System.out.println("[EMIT] Total rayos activos: " + activeRays.size());
