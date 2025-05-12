@@ -187,12 +187,13 @@ public class SoundDebugger {
                 List<Vec3> segments = ray.getPathSegments();
                 float maxDistance = ray.getDistanceTraveled(currentTick);
                 float cumulative = 0;
-                int reflectionIndex = ray.bounces;
+                List<Integer> bounceIndices = ray.getBounceIndices();
+
 
                 if (segments.size() == 1) {
                     if (SoundDebugger.renderRaysDebugMode) {
                         Vec3 p = segments.get(0);
-                        renderRaySegment(poseStack, p, p.add(0.2, 0, 0), camPos, reflectionIndex);
+                        renderRaySegment(poseStack, p, p.add(0.2, 0, 0), camPos, 0);
                     }
                     continue;
                 }
@@ -205,7 +206,7 @@ public class SoundDebugger {
                     Vec3 to = segments.get(i + 1);
                     Vec3 currentDir = to.subtract(from).normalize();
 
-                    if (lastDir != null && currentDir.dot(lastDir) < 0.99) {
+                    if (bounceIndices.contains(i)) {
                         localBounce++;
                     }
 
