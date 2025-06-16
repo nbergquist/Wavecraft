@@ -1,24 +1,64 @@
 package com.nicholas.wavecraft;
+
+import com.nicholas.wavecraft.commands.WavecraftCommand;
+import com.nicholas.wavecraft.config.WavecraftConfig;
+import com.nicholas.wavecraft.debug.CacheEventHandler;
 import com.nicholas.wavecraft.debug.SoundDebugger;
+import com.nicholas.wavecraft.sound.RayShaderHandler;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
+import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-import com.nicholas.wavecraft.commands.WavecraftCommand;
+import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
+import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-@Mod("wavecraft")
+// La anotación @Mod le dice a Forge que esta clase es la principal de un mod.
+@Mod(WavecraftMod.MODID)
 public class WavecraftMod {
-    public WavecraftMod() {
+    public static final String MODID = "wavecraft";
+    private static final Logger LOGGER = LogManager.getLogger();
 
-        System.out.println("Wavecraft cargado");
-        MinecraftForge.EVENT_BUS.register(SoundDebugger.class);
+    public WavecraftMod() {
+        // --- REGISTRO DE EVENTOS ---
+        // Obtenemos los dos buses de eventos.
+        IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
+        IEventBus forgeEventBus = MinecraftForge.EVENT_BUS;
+
+        // --- Eventos del Ciclo de Vida del Mod (se registran en el MOD bus) ---
+        modEventBus.addListener(this::onClientSetup);
+
+        // --- Eventos del Juego (se registran en el FORGE bus) ---
+        // Registramos instancias de nuestras clases que contienen lógica de eventos.
+        forgeEventBus.register(new CacheEventHandler());
+        forgeEventBus.register(new SoundDebugger());
+
+        // El registro de comandos también es un evento del juego.
+        forgeEventBus.addListener(this::onRegisterCommands);
+
+        WavecraftConfig.register();
+
+        LOGGER.info("Wavecraft Mod: Buses de eventos configurados correctamente.");
     }
 
-    @Mod.EventBusSubscriber(modid = "wavecraft")
-    public static class ModEvents {
-        @SubscribeEvent
-        public static void onRegisterCommands(RegisterCommandsEvent event) {
-            WavecraftCommand.register(event.getDispatcher());
-        }
+    /**
+     * Este método se ejecuta en el bus del MOD, solo durante la carga del cliente.
+     * Es el lugar seguro para inicializar cosas que dependen de OpenGL.
+     */
+    private void onClientSetup(final FMLClientSetupEvent event) {
+        event.enqueueWork(() -> {
+            LOGGER.info("Encolando inicialización de RayShaderHandler en el hilo de renderizado...");
+            RayShaderHandler.init();
+        });
+    }
+
+    /**
+     * Este método se ejecuta en el bus de FORGE cuando el servidor (integrado o dedicado) está listo para registrar comandos.
+     */
+    private void onRegisterCommands(final RegisterCommandsEvent event) {
+        WavecraftCommand.register(event.getDispatcher());
+        LOGGER.info("Comandos de Wavecraft registrados.");
     }
 }
