@@ -1,223 +1,176 @@
 package com.nicholas.wavecraft.sound;
 
+import com.nicholas.wavecraft.commands.WavecraftCommand;
 import com.nicholas.wavecraft.debug.SoundDebugger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import org.joml.Vector3f;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+
 
 public class AcousticRay {
-    /*‑‑config‑‑*/
-    private static final float STEP_LENGTH = 1.0f;   // m
-    private static final int   MAX_BOUNCES = 10;
-    private static final float MAX_DISTANCE = 400f;
-    private static final float MAX_NO_REFLECTION_DISTANCE = 300f;
+    private final InstantRay instantRay;
+    private final VisualRay visualRay;
 
-    /*‑‑estado‑‑*/
-    private Vec3 currentPosition;
-    private Vec3 currentDirection;
-    private int  bounces;
-    private long lastUpdatedTick;
-    private float distanceAccumulator;
-    private float totalDistance;
-    private float distanceSinceLastBounce;
-    private float propagationSpeed = 343f;
+    private final int maxBounces;
 
-    /*‑‑flags‑‑*/
-    private final boolean renderEnabled  = SoundDebugger.renderRays;
-    private final boolean impulseEnabled = SoundDebugger.rayEmissionEnabled;
-
-    /*‑‑para bloquear rebote0‑‑*/
-    private final BlockPos sourceBlock;
-    private boolean leftSourceBlock = false;
-
-    /*‑‑datos fijos‑‑*/
     private final ResourceLocation soundId;
-    private final Vec3 sourcePos;
-    private final long tickLaunched;
 
-    /*‑‑trayectoria para debug‑‑*/
-    private final List<Vec3> path     = new ArrayList<>();
-    private final List<Integer> bounceIndices = new ArrayList<>();
+    private final Set<Integer> processedSegments = new HashSet<>();
 
-    public AcousticRay(Vec3 start, Vec3 dir, float intensity,
-                       ResourceLocation soundId, Vec3 sourcePos, long currentTick) {
+    //private long expireTick = Long.MAX_VALUE;
+    private long simulationExpireTick;  // cuándo dejar de calcular
+    private long visualExpireTick;      // cuándo dejar de renderizar
 
-        this.currentPosition = start;
-        this.currentDirection = dir.normalize();
-        this.soundId   = soundId;
-        this.sourcePos = sourcePos;
+    public AcousticRay(Vec3 origin, Vec3 direction, float propagationSpeed, long currentTick, ResourceLocation soundId, int maxBounces) {
+        this.instantRay = new InstantRay(origin, direction, Float.MAX_VALUE);
+        this.visualRay = new VisualRay(instantRay, currentTick, AcousticRayManager.getSoundSpeed());
 
-        this.sourceBlock = BlockPos.containing(start);
-        this.tickLaunched = currentTick;
-        this.lastUpdatedTick = currentTick - 1;
+        this.soundId = soundId;
+        this.maxBounces = maxBounces;
 
-        if (renderEnabled) path.add(start);          // para el debug
+        if (SoundDebugger.renderRays) {
+            float distance = Math.min(instantRay.getTotalLength(), AcousticRayManager.MAX_RAY_DISTANCE);
+            long travelTimeTicks = (long) Math.ceil(distance / propagationSpeed);
+
+            this.visualExpireTick = currentTick + travelTimeTicks;
+        } else {
+            this.visualExpireTick = currentTick + 1;
+        }
+        this.simulationExpireTick = this.visualExpireTick;
     }
 
-    /*─────────API usado por SoundDebugger────────*/
-    public List<Vec3> getPathSegments() { return path; }
-    public List<Integer> getBounceIndices() { return bounceIndices; }
+    public InstantRay getInstantRay() { return instantRay; }
+    public VisualRay getVisualRay() { return visualRay; }
 
-    public float getDistanceTraveled(long currentTick) {
-        float secondsElapsed = (currentTick - tickLaunched) / 20.0f;
-        return propagationSpeed * secondsElapsed;
+    public ResourceLocation getSoundId() { return soundId; }
+
+    public class InstantRay {
+        private final List<Vec3> path = new ArrayList<>();
+        private final List<Integer> bounceIndices = new ArrayList<>();
+        private final float speed;
+
+        public InstantRay(Vec3 origin, Vec3 direction, float speed) {
+            this.speed = speed;
+            calculatePath(origin, direction);
+        }
+
+        private void calculatePath(Vec3 origin, Vec3 direction) {
+            Minecraft mc = Minecraft.getInstance();
+            LocalPlayer player = mc.player;
+            assert player != null;
+            Level level = player.level();
+            // 1. Pide a RayShaderHandler que calcule la trayectoria
+            List<Vec3> trajectory = RayShaderHandler.calculateRayPath(level, player, origin, direction, speed, maxBounces);
+
+            // 2. Guarda el resultado en patht/
+            this.path.clear();
+            this.path.addAll(trajectory);
+        }
+
+
+        public List<Vec3> getPath() { return path; }
+        public List<Integer> getBounceIndices() { return bounceIndices; }
+
+        public float getTotalLength() {
+            float total = 0;
+            for (int i = 1; i < path.size(); i++)
+                total += (float) path.get(i).distanceTo(path.get(i-1));
+            return total;
+        }
+
     }
 
-    /*public void launchAtTick(long tick) {
-        this.tickLaunched = tick;
-        this.lastUpdatedTick = tick - 1;
-    }*/
+    public class VisualRay {
+        private final InstantRay instantRay;
+        private final long tickLaunched;
+        private final float propagationSpeed;
 
-    public void setPropagationSpeed(float speed) {
-        this.propagationSpeed = Math.max(speed, 0.01f);
-    }
+        public VisualRay(InstantRay instantRay, long tickLaunched, float propagationSpeed) {
+            this.instantRay = instantRay;
+            this.tickLaunched = tickLaunched;
+            this.propagationSpeed = propagationSpeed;
+        }
 
-    public int getBounces() {
-        return bounces;
-    }
+        public float getDistanceTraveled(long currentTick) {
+            return ((currentTick - tickLaunched) / 20f) * propagationSpeed;
+        }
+        public float getTickLaunched() { return tickLaunched; }
 
-    /*─────────bucle de física + impulso────────*/
-    public boolean update(Level world, long currentTick) {
+        public List<Vec3> getPath() { return instantRay.getPath();}
+        public List<Integer> getBounceIndices() { return instantRay.getBounceIndices(); }
 
-        /* Propagamos TODO en un solo tick –velocidad infinita para la parte física */
-        distanceAccumulator = MAX_DISTANCE;
+        public List<Vec3> buildRenderPath(long currentTick) {
+            // --- INICIO DE SECCIÓN DE DEBUG ---
+            if (currentTick % 5 == 0) { // Imprimir solo cada 5 ticks para no saturar la consola
+                float debugMaxDistance = getDistanceTraveled(currentTick);
+                /*System.out.println(
+                        "[DEBUG RENDER] Tick: " + currentTick +
+                                " | Rayo lanzado en: " + this.tickLaunched +
+                                " | Ticks transcurridos: " + (currentTick - this.tickLaunched) +
+                                " | Velocidad: " + this.propagationSpeed +
+                                " | MaxDist Calculada: " + String.format("%.2f", debugMaxDistance) +
+                                " | Puntos en Origen (Shader): " + this.instantRay.getPath().size()
+                );*/
+            }
+            // --- FIN DE SECCIÓN DE DEBUG ---
 
-        while (distanceAccumulator >= STEP_LENGTH &&
-                bounces < MAX_BOUNCES &&
-                totalDistance < MAX_DISTANCE &&
-                distanceSinceLastBounce < MAX_NO_REFLECTION_DISTANCE) {
 
-            Vec3 nextPos = currentPosition.add(currentDirection.scale(STEP_LENGTH));
-            BlockPos nextBlock = BlockPos.containing(nextPos);
+            // Lógica de propagación (la versión corregida que te pasé antes)
+            float maxDistance = getDistanceTraveled(currentTick);
+            List<Vec3> src = instantRay.getPath();
+            List<Vec3> dst = new ArrayList<>();
 
-            /* Marcar que salimos del bloque emisor */
-            if (!leftSourceBlock && !nextBlock.equals(sourceBlock))
-                leftSourceBlock = true;
-
-            /*Rayos impulso: capta si ya hubo ≥1 rebote */
-            if (impulseEnabled && bounces > 0) collectImpulse(currentPosition, nextPos, currentTick);
-
-            /* Test de colisión */
-            BlockHitResult hit = world.clip(new net.minecraft.world.level.ClipContext(
-                    currentPosition, nextPos,
-                    net.minecraft.world.level.ClipContext.Block.OUTLINE,
-                    net.minecraft.world.level.ClipContext.Fluid.NONE, null));
-
-            /*Ignorar caras del bloque emisor hasta salir */
-            if (!leftSourceBlock && hit.getType() != HitResult.Type.MISS && hit.getBlockPos().equals(sourceBlock)) {
-                advance(nextPos);
-                continue;
+            if (src.isEmpty()) {
+                return dst;
             }
 
-            /*Reflexión válida */
-            if (leftSourceBlock && hit.getType() != HitResult.Type.MISS && isReflectiveBlock(world, hit.getBlockPos())) {
-                Vec3 normal = new Vec3(hit.getDirection().getStepX(),
-                        hit.getDirection().getStepY(),
-                        hit.getDirection().getStepZ());
+            dst.add(src.get(0));
+            float accumulatedDistance = 0f;
 
-                /*descartar salida rasante */
-                if (Math.abs(currentDirection.dot(normal)) > 0.99) {
-                    advance(nextPos);
-                    continue;
+            for (int i = 0; i < src.size() - 1; i++) {
+                Vec3 start = src.get(i);
+                Vec3 end = src.get(i + 1);
+                float segmentLength = (float) start.distanceTo(end);
+
+                if (accumulatedDistance + segmentLength > maxDistance) {
+                    if (segmentLength == 0) continue;
+                    float remainingDistance = maxDistance - accumulatedDistance;
+                    float t = remainingDistance / segmentLength;
+                    Vec3 finalPoint = start.add(end.subtract(start).scale(t));
+                    dst.add(finalPoint);
+                    return dst;
+                } else {
+                    dst.add(end);
+                    accumulatedDistance += segmentLength;
                 }
-
-                currentPosition = hit.getLocation();
-                if (renderEnabled) {
-                    path.add(currentPosition);
-                    bounceIndices.add(path.size() - 1);
-                }
-                currentDirection = reflect(currentDirection, normal);
-                bounces++;
-                distanceSinceLastBounce = 0;
-
-            } else {                               // sin reflexión
-                advance(nextPos);
             }
-        }
-        return  (bounces              < MAX_BOUNCES) &&
-                (totalDistance        < MAX_DISTANCE) &&
-                (distanceAccumulator  >= STEP_LENGTH);
-    }
-
-    /*─────────helpers────────*/
-    private void advance(Vec3 nextPos) {
-        currentPosition = nextPos;
-        if (renderEnabled) path.add(nextPos);
-        distanceAccumulator      -= STEP_LENGTH;
-        totalDistance            += STEP_LENGTH;
-        distanceSinceLastBounce  += STEP_LENGTH;
-    }
-
-    private void collectImpulse(Vec3 from, Vec3 to, long tick) {
-        LocalPlayer pl = Minecraft.getInstance().player;
-        if (pl == null) return;
-
-        Vec3 headPos = pl.getEyePosition();
-        float half   = SoundDebugger.dimensions / 2f;
-
-        Map<RayImpulseCapture.Plane, Vec3> normals = Map.of(
-                RayImpulseCapture.Plane.XY, new Vec3(0,0,1),
-                RayImpulseCapture.Plane.XZ, new Vec3(0,1,0),
-                RayImpulseCapture.Plane.YZ, new Vec3(1,0,0));
-
-        for (var e : normals.entrySet()) {
-            Vec3 hit = intersectSegmentWithPlane(from, to, headPos, e.getValue());
-            if (hit == null) continue;
-            Vec3 offset = hit.subtract(headPos);
-            if (Math.max(Math.max(Math.abs(offset.x), Math.abs(offset.y)), Math.abs(offset.z)) > half) continue;
-
-            double distSrc = sourcePos.distanceTo(hit);
-            float  tSec    = (float)(distSrc / 343f);
-            double distHead= hit.distanceTo(headPos);
-
-            Vec3 toSrc = sourcePos.subtract(headPos).normalize();
-            Vec3 look  = pl.getLookAngle();
-            Vec3 rEar  = look.cross(new Vec3(0,1,0)).normalize();
-            Vec3 lEar  = rEar.scale(-1);
-
-            float weightR = (float) (0.5f + 0.5f * Math.max(0, rEar.dot(toSrc)));
-            float weightL = (float) (0.5f + 0.5f * Math.max(0, lEar.dot(toSrc)));
-
-            ConvolutionManager.addCapture(
-                    new RayImpulseCapture(soundId, sourcePos, distSrc, hit, distHead,
-                            tSec, bounces, 1f, e.getKey(), weightR, true), tick);
-            ConvolutionManager.addCapture(
-                    new RayImpulseCapture(soundId, sourcePos, distSrc, hit, distHead,
-                            tSec, bounces, 1f, e.getKey(), weightL, false), tick);
+            return dst;
         }
     }
 
-    private boolean isReflectiveBlock(Level world, BlockPos pos) {
-        return world.getBlockState(pos).isCollisionShapeFullBlock(world, pos);
+    public boolean isExpired(long currentTick) {
+        return currentTick >= simulationExpireTick;
     }
 
-    private Vec3 intersectSegmentWithPlane(Vec3 p0, Vec3 p1, Vec3 planePoint, Vec3 normal) {
-        Vec3 dir = p1.subtract(p0);
-        double denom = dir.dot(normal);
-        if (Math.abs(denom) < 1e-6) return null;
-
-        double t = (planePoint.subtract(p0)).dot(normal) / denom;
-        if (t >= 0 && t <= 1) {
-            return p0.add(dir.scale(t));
-        }
-        return null;
+    public boolean isVisualExpired(long currentTick) {
+        return currentTick >= visualExpireTick;
+    }
+    public boolean hasSegmentBeenProcessed(int segmentIndex) {
+        return processedSegments.contains(segmentIndex);
     }
 
-    private Vec3 reflect(Vec3 incoming, Vec3 normal) {
-        return incoming.subtract(normal.scale(2 * incoming.dot(normal))).normalize();
+    public void markSegmentAsProcessed(int segmentIndex) {
+        processedSegments.add(segmentIndex);
     }
 
-    private static float getAngularAttenuation(Vec3 toSource, Vec3 earDir) {
-        return 1.0f;
-    }
 }

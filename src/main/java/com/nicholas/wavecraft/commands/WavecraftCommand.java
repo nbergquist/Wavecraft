@@ -43,7 +43,7 @@ public class WavecraftCommand {
                                 .then(Commands.argument("value", FloatArgumentType.floatArg(1.0f, 10000.0f))
                                         .executes(ctx -> {
                                             float value = FloatArgumentType.getFloat(ctx, "value");
-                                            AcousticRayManager.setSoundSpeed(value);
+                                            AcousticRayManager.getInstance().setSoundSpeed(value);
                                             ctx.getSource().sendSuccess(() ->
                                                     Component.literal("Velocidad del sonido ajustada a " + value + " m/s"), true);
                                             return 1;
@@ -54,7 +54,7 @@ public class WavecraftCommand {
                                 .then(Commands.argument("value", IntegerArgumentType.integer(1, 10000))
                                         .executes(ctx -> {
                                             int value = IntegerArgumentType.getInteger(ctx, "value");
-                                            AcousticRayManager.setNumRays(value);
+                                            AcousticRayManager.getInstance().setNumRays(value);
                                             ctx.getSource().sendSuccess(() ->
                                                     Component.literal("Número de rayos ajustado a " + value), true);
                                             return 1;
