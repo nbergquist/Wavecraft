@@ -32,27 +32,40 @@ public class AcousticRay {
     private long visualExpireTick;      // cuándo dejar de renderizar
 
     public AcousticRay(Vec3 origin, Vec3 direction, float propagationSpeed, long currentTick, ResourceLocation soundId, int maxBounces) {
-        this.instantRay = new InstantRay(origin, direction, Float.MAX_VALUE);
-        this.visualRay = new VisualRay(instantRay, currentTick, AcousticRayManager.getSoundSpeed());
-
         this.soundId = soundId;
         this.maxBounces = maxBounces;
 
+        this.instantRay = new InstantRay(origin, direction, Float.MAX_VALUE);
+        this.visualRay = new VisualRay(instantRay, currentTick, AcousticRayManager.getSoundSpeed());
+
+        this.simulationExpireTick = currentTick + 2;
+
         if (SoundDebugger.renderRays) {
             float distance = Math.min(instantRay.getTotalLength(), AcousticRayManager.MAX_RAY_DISTANCE);
-            long travelTimeTicks = (long) Math.ceil(distance / propagationSpeed);
-
-            this.visualExpireTick = currentTick + travelTimeTicks;
+            long travelTimeTicks = (long) Math.ceil((distance / propagationSpeed) * 20);
+            this.visualExpireTick = currentTick + travelTimeTicks + 20; // 1 segundo de margen
+            //this.simulationExpireTick = currentTick + 1;  // la simulación solo necesita 1 tick
         } else {
-            this.visualExpireTick = currentTick + 1;
+            this.visualExpireTick = this.simulationExpireTick;
+            //this.simulationExpireTick = currentTick + 2;
         }
-        this.simulationExpireTick = this.visualExpireTick;
     }
 
     public InstantRay getInstantRay() { return instantRay; }
     public VisualRay getVisualRay() { return visualRay; }
 
     public ResourceLocation getSoundId() { return soundId; }
+
+    /**
+     * Un record anidado para almacenar todos los datos de un único vértice de la trayectoria del rayo,
+     * tal y como se reciben desde el shader de Transform Feedback.
+     */
+    public record PathPoint(
+            Vec3 position,
+            float bounceStatus,
+            Vec3 normal,
+            float debugCode
+    ) {}
 
     public class InstantRay {
         private final List<Vec3> path = new ArrayList<>();
@@ -70,6 +83,7 @@ public class AcousticRay {
             assert player != null;
             Level level = player.level();
             // 1. Pide a RayShaderHandler que calcule la trayectoria
+            System.out.println("maxBounces en calculatePath: " + maxBounces);
             List<Vec3> trajectory = RayShaderHandler.calculateRayPath(level, player, origin, direction, speed, maxBounces);
 
             // 2. Guarda el resultado en patht/

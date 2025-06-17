@@ -313,6 +313,8 @@ public class RayShaderHandler {
 
     public static List<Vec3> calculateRayPath(Level level, LocalPlayer player, Vec3 origin, Vec3 direction, float speed, int maxBounces) {
         System.out.println("[DEBUG] Thread in calculateRayPath: " + Thread.currentThread().getName());
+        //maxBounces = 4;
+        System.out.println("[DEBUG] calculateRayPath maxBounces = " + maxBounces);
         int localDummyVAO = -1;
         List<Vec3> trajectory = new ArrayList<>(); // Declara trajectory aquí para que esté en el scope del return del try y del catch/finally (aunque en catch devuelves una nueva)
 

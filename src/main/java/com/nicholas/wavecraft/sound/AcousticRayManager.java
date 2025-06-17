@@ -44,7 +44,7 @@ public class AcousticRayManager {
         return soundSpeed;
     }
 
-    private static int numRays = 1;
+    private static int numRays = 100;
     private static final int MAX_RAYS = 10000;
     public static final float MAX_RAY_DISTANCE = 500.0f;
     private static final int   MAX_RAY_BOUNCES  = 20;
@@ -101,15 +101,16 @@ public class AcousticRayManager {
             Iterator<AcousticRay> it = activeRays.iterator();
             while (it.hasNext()) {
                 AcousticRay ray = it.next();
-                if (ray.isExpired(currentTick)) {
+                if (!ray.isExpired(currentTick)) {
+                    // 1. Procesar la trayectoria del rayo mientras esté activo
+                    checkRayPlaneIntersections(ray, player, currentTick);
+                } else {
+                    // 2. El rayo terminó su simulación; manejar visualización y limpieza
                     if (renderRays && !ray.isVisualExpired(currentTick)) {
                         SoundDebugger.addVisualRay(ray, currentTick);
                     }
-                    if (!ray.isExpired(currentTick)) {
-                        checkRayPlaneIntersections(ray, player, currentTick);
-                    }
                     if (ray.isVisualExpired(currentTick)) {
-                        it.remove(); // solo borrar cuando ya no se necesita ni para renderizar
+                        it.remove();
                     }
                 }
             }
@@ -120,10 +121,13 @@ public class AcousticRayManager {
     public void spawnRay(Vec3 origin, Vec3 direction, float speed, long currentTick, ResourceLocation soundId) {
         // Añade un bloque sincronizado aquí para evitar la race condition
         synchronized (activeRays) {
-            AcousticRay ray = new AcousticRay(origin, direction, speed, currentTick, soundId, MAX_RAY_BOUNCES);
-            //activeRays.add(ray);
-            synchronized (pendingRays) {
-                pendingRays.add(ray);
+            System.out.println("Max Ray Bounces en spawnRay: " + MAX_RAY_BOUNCES);
+            if (activeRays.size() < MAX_RAYS) {
+                AcousticRay ray = new AcousticRay(origin, direction, speed, currentTick, soundId, MAX_RAY_BOUNCES);
+                //activeRays.add(ray);
+                synchronized (pendingRays) {
+                    pendingRays.add(ray);
+                }
             }
         }
     }
@@ -143,7 +147,8 @@ public class AcousticRayManager {
             //RenderSystem.recordRenderCall(() -> {
             //    manager.spawnRay(safeStartPos, dir, getSoundSpeed(), currentTick, soundId);
             //});
-            manager.spawnRay(safeStartPos, dir, getSoundSpeed(), currentTick, soundId);
+            //manager.spawnRay(safeStartPos, dir, getSoundSpeed(), currentTick, soundId);
+            this.spawnRay(safeStartPos, dir, getSoundSpeed(), currentTick, soundId);
         }
     }
 
