@@ -21,7 +21,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.Level;
-import org.apache.commons.math3.complex.Complex;
+//import org.apache.commons.math3.complex.Complex;
 import org.apache.commons.math3.transform.DftNormalization;
 import org.apache.commons.math3.transform.FastFourierTransformer;
 import org.apache.commons.math3.transform.TransformType;
@@ -38,6 +38,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.concurrent.CompletableFuture;
+
+//import edu.emory.mathcs.jtransforms.fft.DoubleFFT_1D;
 
 
 public class ConvolutionManager {
@@ -387,94 +389,59 @@ public class ConvolutionManager {
         return finalPcm;
     }*/
 
+    // EN: ConvolutionManager.java
+
     private static short[] convolve(short[] x, short[] h) {
+        System.out.println("[DEBUG 1 AUTOCONTENIDO] Inicio convolución. Señal=" + x.length + ", IR=" + h.length);
 
-        System.out.println("[DEBUG 1] Inicio convolución. Señal=" +
-                (x != null ? x.length : "null") + ", IR=" + (h != null ? h.length : "null"));
+        if (x == null || x.length == 0 || h == null || h.length == 0) return null;
 
-        if (x == null || x.length == 0 || h == null || h.length == 0) {
-            System.err.println("[ERROR] Señal o IR nulas o vacías.");
-            return null;
+        int resultLength = x.length + h.length - 1;
+        int fftSize = Integer.highestOneBit(resultLength - 1) << 1;
+        System.out.println("[DEBUG 2 AUTOCONTENIDO] fftSize=" + fftSize);
+
+        // 1. Preparar arrays complejos
+        Complex[] xComplex = new Complex[fftSize];
+        for (int i = 0; i < x.length; i++) xComplex[i] = new Complex(x[i] / 32767.0, 0);
+        for (int i = x.length; i < fftSize; i++) xComplex[i] = new Complex(0, 0);
+
+        Complex[] hComplex = new Complex[fftSize];
+        for (int i = 0; i < h.length; i++) hComplex[i] = new Complex(h[i] / 32767.0, 0);
+        for (int i = h.length; i < fftSize; i++) hComplex[i] = new Complex(0, 0);
+
+        // 2. Calcular FFT usando nuestras nuevas clases
+        System.out.println("[DEBUG 3 AUTOCONTENIDO] Transformando señal...");
+        Complex[] X_fft = Fft.fft(xComplex);
+        System.out.println("[DEBUG 4 AUTOCONTENIDO] Transformando IR...");
+        Complex[] H_fft = Fft.fft(hComplex);
+
+        // 3. Multiplicar en frecuencia
+        Complex[] Y_fft = new Complex[fftSize];
+        for (int i = 0; i < fftSize; i++) {
+            Y_fft[i] = X_fft[i].times(H_fft[i]);
         }
 
-        final int BLOCK = 8192;
-        final int fftSize = Integer.highestOneBit(BLOCK + x.length - 1) << 1;
+        // 4. Calcular IFFT
+        System.out.println("[DEBUG 5 AUTOCONTENIDO] Transformando de vuelta al tiempo...");
+        Complex[] y_complex = Fft.ifft(Y_fft);
 
-        System.out.println("[DEBUG 2] fftSize=" + fftSize + " (BLOCK=" + BLOCK + ")");
-
-        FastFourierTransformer fft = new FastFourierTransformer(DftNormalization.STANDARD);
-
-        Complex[] xPad = new Complex[fftSize];
-        for (int i = 0; i < x.length; i++) {
-            xPad[i] = new Complex(x[i] / 32767.0, 0);
-        }
-        for (int i = x.length; i < fftSize; i++) {
-            xPad[i] = Complex.ZERO;
-        }
-
-        System.out.println("[DEBUG 3] FFT de la señal original");
-        Complex[] X = fft.transform(xPad, TransformType.FORWARD);
-
-        double[] y = new double[x.length + h.length - 1];
-        System.out.println("[DEBUG 4] Búfer de salida preparado. Tamaño: " + y.length);
-
-        for (int start = 0; start < h.length; start += BLOCK) {
-            int size = Math.min(BLOCK, h.length - start);
-            System.out.println("[DEBUG 5] Bloque IR desde " + start + " tamaño " + size);
-
-            Complex[] hPad = new Complex[fftSize];
-            for (int i = 0; i < size; i++) {
-                hPad[i] = new Complex(h[start + i] / 32767.0, 0);
-            }
-            for (int i = size; i < fftSize; i++) {
-                hPad[i] = Complex.ZERO;
-            }
-
-            Complex[] H = fft.transform(hPad, TransformType.FORWARD);
-
-            for (int i = 0; i < fftSize; i++) {
-                H[i] = X[i].multiply(H[i]);
-            }
-
-            Complex[] block = fft.transform(H, TransformType.INVERSE);
-
-            for (int i = 0; i < block.length; i++) {
-                int outIdx = start + i;
-                if (outIdx < y.length) {
-                    y[outIdx] += block[i].getReal() / fftSize;
-                } else {
-                    System.err.println("[WARNING] outIdx fuera de rango: " + outIdx);
-                }
-            }
-
-            System.out.println("[DEBUG 6] Procesado bloque IR hasta índice " + (start + size - 1));
-        }
-
-        System.out.println("[DEBUG 7] Normalización y cuantización");
-        double max = 1e-12;
-        for (double v : y) {
-            if (Double.isNaN(v) || Double.isInfinite(v)) {
-                System.err.println("[ERROR] Valor inválido en salida de convolución: " + v);
-            }
-            max = Math.max(max, Math.abs(v));
-        }
-
-        System.out.println("[DEBUG 8] Máximo absoluto en y = " + max);
-
-        short[] pcm = new short[y.length];
-        for (int i = 0; i < y.length; i++) {
-            double scaled = y[i] / max;
-            scaled = Math.max(-1.0, Math.min(1.0, scaled));
-            pcm[i] = (short) Math.round(scaled * 32767);
-
-            // Validación extra
-            if (Float.isNaN(pcm[i]) || Float.isInfinite(pcm[i])) {
-                System.err.println("[ERROR] Valor inválido en pcm[" + i + "] = " + pcm[i]);
-                pcm[i] = 0;
+        // 5. Normalizar y convertir
+        System.out.println("[DEBUG 6 AUTOCONTENIDO] Normalizando...");
+        double maxAmplitude = 1e-12;
+        for (int i = 0; i < resultLength; i++) {
+            if (Math.abs(y_complex[i].re()) > maxAmplitude) {
+                maxAmplitude = Math.abs(y_complex[i].re());
             }
         }
 
-        System.out.println("[DEBUG 9] Convolución finalizada. Longitud PCM: " + pcm.length);
+        short[] pcm = new short[resultLength];
+        for (int i = 0; i < resultLength; i++) {
+            double normalizedSample = y_complex[i].re() / maxAmplitude;
+            normalizedSample = Math.max(-1.0, Math.min(1.0, normalizedSample));
+            pcm[i] = (short) Math.round(normalizedSample * 32767);
+        }
+
+        System.out.println("[DEBUG 7 AUTOCONTENIDO] Convolución finalizada.");
         return pcm;
     }
 

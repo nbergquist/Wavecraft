@@ -33,8 +33,15 @@ bool isSolidBlock(ivec3 blockCoord_tex) {
     return texelFetch(worldTexture, blockCoord_tex, 0).r > 0.5;
 }
 
-// La función DDA no cambia. La lógica principal se mueve a main.
 vec3 ddaBounce(vec3 segmentOrigin_world, vec3 segmentDir_world, out vec3 hitNormal_world, out float travelDistance) {
+    // --- NUEVA COMPROBACIÓN DE ROBUSTEZ ---
+    if (length(segmentDir_world) < 0.001) {
+        hitNormal_world = vec3(0.0);
+        travelDistance = 0.0;
+        return segmentOrigin_world; // Devuelve el origen si no hay dirección
+    }
+    // --- FIN DE LA COMPROBACIÓN ---
+
     ivec3 mapPos = ivec3(floor(segmentOrigin_world));
     vec3 tDelta = abs(vec3(1.0) / segmentDir_world);
     ivec3 step = ivec3(sign(segmentDir_world));
@@ -70,8 +77,6 @@ vec3 ddaBounce(vec3 segmentOrigin_world, vec3 segmentDir_world, out vec3 hitNorm
             return segmentOrigin_world + segmentDir_world * maxDistance;
         }
 
-        debugCode = float((mapPos.x - worldOffset.x) + (mapPos.y - worldOffset.y)*100 + (mapPos.z - worldOffset.z)*10000);
-
         if (isSolidBlock(mapPos - worldOffset)) {
             return segmentOrigin_world + segmentDir_world * travelDistance;
         }
@@ -87,73 +92,58 @@ void main() {
     vec3 currentRayOrigin = rayOrigin;
     vec3 currentRayDir = normalize(rayDirection);
 
-    // --- INICIALIZACIÓN DE SALIDAS ---
-    outPosition = rayOrigin;
-    bounceStatus = 1.0;
-    outNormal = vec3(0.0);
-    debugCode = 10.0;
-    // (El resto de variables de debug se asignarán dentro del bucle)
-
-    // forzar uso de dummy y evitar que el compilador lo elimine
-    float _keepDummy = dummy;
-    if (_keepDummy < 0.0) {
-        // nunca ocurre, solo para retener dummy
-        gl_Position = vec4(0.0);
-    }
-
+    // --- MANEJO DEL VÉRTICE 0 (PUNTO DE ORIGEN) ---
     if (gl_VertexID == 0) {
-        // Emitir el punto inicial del rayo sin rebotes
         outPosition = rayOrigin;
-        bounceStatus = 1.0;
+        bounceStatus = 1.0; // Estado "activo" o "inicio de segmento"
         outNormal = vec3(0.0);
         debugCode = 0.0;
         debugCoord_tex = vec3(0.0);
         outRayOrigin = rayOrigin;
-        outRayDirection = normalize(rayDirection);
+        outRayDirection = currentRayDir;
         outHitPointBeforeEpsilon = rayOrigin;
         outHitBlockCenter = floor(rayOrigin) + 0.5;
         outAccumulatedT = 0.0;
-        return;
+        return; // Termina la ejecución para el vértice de origen
     }
 
-    // --- ¡NUEVA LÓGICA DE INICIO SEGURO! ---
-    // Si el rayo nace DENTRO de un bloque sólido, lo avanzamos un paso
-    // para que empiece en el aire y no se auto-interseque.
-    ivec3 startBlock = ivec3(floor(currentRayOrigin));
-    if (isSolidBlock(startBlock - worldOffset)) {
-        // Da un pequeño paso para salir del bloque inicial
-        currentRayOrigin += currentRayDir * epsilon * 10.0;
-    }
-    // ------------------------------------
-
+    // --- LÓGICA DE CÁLCULO ITERATIVO MEJORADA ---
     for (int bounceNum = 0; bounceNum < gl_VertexID; bounceNum++) {
+
         vec3 hitNormal;
         float travelDistance;
 
+        // Guardar estado para debug
         outRayOrigin = currentRayOrigin;
         outRayDirection = currentRayDir;
 
+        // Calcular el siguiente punto de colisión
         vec3 hitPoint = ddaBounce(currentRayOrigin, currentRayDir, hitNormal, travelDistance);
 
-        outHitPointBeforeEpsilon = hitPoint;
-        outAccumulatedT = travelDistance;
+        // Actualizar siempre las variables de salida con el resultado de la iteración actual.
         outPosition = hitPoint;
         outNormal = hitNormal;
+        outAccumulatedT = travelDistance;
         debugCoord_tex = vec3(ivec3(floor(hitPoint)) - worldOffset);
         outHitBlockCenter = vec3(ivec3(floor(hitPoint))) + 0.5;
 
+        // Actualizar estado para la SIGUIENTE iteración del bucle
         if (length(hitNormal) < 0.1) {
+            // Terminación: el rayo no rebotó
             bounceStatus = 0.0;
             debugCode = 0.0;
-            break;
+
+            // Mantener la posición, pero anular la dirección para detener la propagación
+            currentRayOrigin = hitPoint;
+            currentRayDir = vec3(0.0);
+        } else {
+            // Rebote válido
+            bounceStatus = 2.0; // 2.0 para un rebote, 1.0 para el origen
+            debugCode = float(bounceNum + 1);
+
+            // Actualizar origen y dirección para el siguiente segmento
+            currentRayOrigin = hitPoint + hitNormal * epsilon;
+            currentRayDir = reflect(currentRayDir, hitNormal);
         }
-
-        // El DDA ahora maneja correctamente la auto-intersección,
-        // por lo que el `debugCode = 2.0` no debería aparecer.
-        bounceStatus = 1.0;
-        debugCode = float(bounceNum + 1);
-
-        currentRayOrigin = hitPoint + hitNormal * epsilon;
-        currentRayDir = reflect(currentRayDir, hitNormal);
     }
 }

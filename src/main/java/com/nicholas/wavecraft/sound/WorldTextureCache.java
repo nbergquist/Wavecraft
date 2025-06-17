@@ -68,52 +68,58 @@ public class WorldTextureCache {
      * @param player El jugador actual, usado para obtener el nivel y la posición.
      */
     private void regenerateTexture(LocalPlayer player) {
+        // Como este método se llama desde el hilo de render, podemos ejecutar comandos de OpenGL directamente.
         this.textureOrigin = player.blockPosition().offset(-TEXTURE_DIMENSION / 2, -TEXTURE_DIMENSION / 2, -TEXTURE_DIMENSION / 2);
         System.out.println("[Wavecraft Cache] Regenerando textura en origen: " + this.textureOrigin);
 
-        // 1. Borra la textura antigua
+        // 1. Borra la textura antigua si existe
         if (this.textureId != -1) {
             GL33.glDeleteTextures(this.textureId);
+            this.textureId = -1; // Marcar ID como inválida
         }
 
-        // 2. Genera una nueva textura vacía y obtiene el ID
-        textureId = GL33.glGenTextures();
-        GL33.glBindTexture(GL33.GL_TEXTURE_3D, textureId);
-        GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1);
-        GL12.glTexImage3D(
-                GL12.GL_TEXTURE_3D,
-                0,
-                GL11.GL_RGBA8, // formato interno con 4 componentes de 8 bits
-                TEXTURE_DIMENSION, TEXTURE_DIMENSION, TEXTURE_DIMENSION,
-                0,
-                GL11.GL_RED,
-                GL11.GL_UNSIGNED_BYTE,
-                (ByteBuffer) null
-        );
-
-        // 3. Llena el buffer en RAM (¡no uses OpenGL aún!)
+        // 2. Genera los datos de la textura en la CPU
         byte[] rgbaData = generateTextureData(player.level(), this.textureOrigin, TEXTURE_DIMENSION, TEXTURE_DIMENSION, TEXTURE_DIMENSION);
-        ByteBuffer buffer = MemoryUtil.memAlloc(rgbaData.length);
-        buffer.put(rgbaData).flip();
+        ByteBuffer buffer = null;
+        try {
+            buffer = MemoryUtil.memAlloc(rgbaData.length);
+            buffer.put(rgbaData).flip();
 
+            // 3. Genera, configura y sube la nueva textura en un bloque síncrono
+            textureId = GL33.glGenTextures();
+            GL33.glBindTexture(GL33.GL_TEXTURE_3D, textureId);
 
-        // 4. Encola la subida en el hilo de render
-        RenderSystem.recordRenderCall(() -> {
-            GL11.glBindTexture(GL12.GL_TEXTURE_3D, textureId);
+            // Configurar parámetros para evitar wrapping y usar el filtrado más simple (más rápido)
+            GL33.glTexParameteri(GL33.GL_TEXTURE_3D, GL33.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+            GL33.glTexParameteri(GL33.GL_TEXTURE_3D, GL33.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+            GL33.glTexParameteri(GL33.GL_TEXTURE_3D, GL33.GL_TEXTURE_WRAP_R, GL12.GL_CLAMP_TO_EDGE);
+            GL33.glTexParameteri(GL33.GL_TEXTURE_3D, GL33.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            GL33.glTexParameteri(GL33.GL_TEXTURE_3D, GL33.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+
             GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1);
-            GL12.glTexSubImage3D(
+
+            // Usar glTexImage3D para asignar memoria y subir los datos a la vez
+            GL12.glTexImage3D(
                     GL12.GL_TEXTURE_3D,
                     0,
-                    0, 0, 0,
+                    GL11.GL_RGBA8,          // Formato interno en la GPU
                     TEXTURE_DIMENSION, TEXTURE_DIMENSION, TEXTURE_DIMENSION,
-                    GL11.GL_RED, // formato externo
-                    GL11.GL_UNSIGNED_BYTE, // tipo de datos
-                    buffer // asegúrate de que tiene capacidad = TEXTURE_DIMENSION^3 * 4 bytes
+                    0,
+                    GL11.GL_RGBA,           // Formato del buffer que estamos subiendo (corregido)
+                    GL11.GL_UNSIGNED_BYTE,  // Tipo de datos en el buffer
+                    buffer
             );
-            MemoryUtil.memFree(buffer);
-            System.out.println("[Wavecraft Cache] Textura con ID " + textureId + " subida correctamente desde hilo de render");
-        });
 
+            GL33.glBindTexture(GL33.GL_TEXTURE_3D, 0); // Desvincular para buena práctica
+            System.out.println("[Wavecraft Cache] Textura con ID " + textureId + " regenerada y subida correctamente.");
+
+        } finally {
+            if (buffer != null) {
+                MemoryUtil.memFree(buffer);
+            }
+        }
+
+        // 4. Marcar como "limpia" SÓLO después de que la subida se ha completado
         this.isDirty = false;
     }
 

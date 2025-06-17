@@ -74,57 +74,57 @@ public class SoundTracker {
     }*/
 
     @SubscribeEvent
-    public static void onPlaySound(PlaySoundEvent event) { // <-- CAMBIO DE NOMBRE Y TIPO DE EVENTO
-        // 1. Filtros iniciales de seguridad
-        if (Minecraft.getInstance().level == null) {
+    public static void onPlaySound(PlaySoundEvent event) {
+        // 1. Filtros de seguridad
+        if (Minecraft.getInstance().level == null || event.getSound() == null || event.getSound() instanceof ReflectedSoundInstance || event.getSound().getSource() == SoundSource.MUSIC) {
             return;
         }
 
-        SoundInstance sound = event.getSound();
-        if (sound == null || sound instanceof ReflectedSoundInstance || sound.getSource() == SoundSource.MUSIC) {
-            return;
-        }
-
-        // 2. Comprobamos si nuestro sistema está activado (sin la comprobación de volumen que fallaba)
+        // 2. Comprobar si el sistema de simulación está activado
         if (SoundDebugger.rayEmissionEnabled) {
+            SoundInstance sound = event.getSound();
+            ResourceLocation location = sound.getLocation();
 
-            Vec3 pos = new Vec3(sound.getX(), sound.getY(), sound.getZ());
+            // --- EXTRACCIÓN DE DATOS DEFENSIVA ---
+            // Vamos a intentar obtener los datos, pero proporcionaremos valores seguros si algo falla.
+            // Esto evitará el crash sin importar el estado en que se encuentre la instancia de sonido.
 
+            Vec3 pos;
             float pitch;
+            float volume;
+
+            try {
+                pos = new Vec3(sound.getX(), sound.getY(), sound.getZ());
+            } catch (Exception e) {
+                // Si la posición falla, no podemos hacer nada. Lo registramos y salimos.
+                System.err.println("[Wavecraft] No se pudo obtener la posición para el sonido: " + location + ". Abortando simulación para este sonido.");
+                return; // Dejamos que el sonido original se reproduzca para no perderlo del todo.
+            }
 
             try {
                 pitch = sound.getPitch();
-            } catch (NullPointerException e) {
+            } catch (Exception e) {
+                System.err.println("[Wavecraft] No se pudo obtener el pitch para el sonido: " + location + ". Usando 1.0 por defecto.");
                 pitch = 1.0f;
             }
 
-            // 3. Guardamos el pitch para usarlo después
-            lastKnownPitches.put(sound.getLocation(), pitch);
+            try {
+                // Este es el bloque que captura el error del crash report.
+                volume = sound.getVolume();
+            } catch (Exception e) {
+                System.err.println("[Wavecraft] CRÍTICO: Fallo al obtener el volumen para el sonido: " + location + ". Esta era la causa del crash. Usando 1.0 por defecto.");
+                volume = 1.0f;
+            }
+            // --- FIN DE LA EXTRACCIÓN DEFENSIVA ---
 
-            // 4. Llamamos directamente al AcousticRayManager para generar los rayos
-            long worldTime = Minecraft.getInstance().level.getGameTime();
-            AcousticRayManager.getInstance().emitRays(pos, sound.getLocation(), worldTime);
-            AcousticRayManager.getInstance().tick(Minecraft.getInstance().level, worldTime); // Forzamos un tick para procesar los rayos inmediatamente
-            new Thread(() -> {
-                short[] convoluted = ConvolutionManager.processImpulsesFor(sound.getLocation());
+            // El resto del flujo es el que ya habíamos validado
+            lastKnownPitches.put(location, pitch);
+            SoundDebugger.queuedSounds.add(new SoundDebugger.QueuedSound(location, pos, volume));
+            System.out.println("[SoundTracker] ✅ Encolado para reemplazar: " + location);
 
-                if (convoluted == null || convoluted.length == 0) {
-                    System.err.println("[ERROR] Audio convolucionado vacío. No se reproduce.");
-                    return;
-                }
-
-                WavecraftDynamicSound soundToPlay = new WavecraftDynamicSound(sound.getLocation(), convoluted, sound.getVolume());
-                soundToPlay.play();
-                System.out.println("[DEBUG AUDIO] Reproducción lanzada para: " + sound.getLocation());
-
-            }).start();
-
-
-            System.out.println("[SoundTracker] ✅ Capturado y REEMPLAZANDO: " + sound.getLocation());
+            // Cancelamos el sonido original
+            event.setSound(null);
         }
-
-        // 5. El paso CRÍTICO para REEMPLAZAR el sonido original.
-        event.setSound(null);
     }
 
     /*@SubscribeEvent
