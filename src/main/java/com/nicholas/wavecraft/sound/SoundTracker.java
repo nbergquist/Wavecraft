@@ -2,9 +2,13 @@ package com.nicholas.wavecraft.sound;
 
 import com.nicholas.wavecraft.debug.SoundDebugger;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.resources.sounds.Sound;
 import net.minecraft.client.resources.sounds.SoundInstance;
+import net.minecraft.client.sounds.SoundManager;
+import net.minecraft.client.sounds.WeighedSoundEvents;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.sound.PlaySoundEvent;
@@ -12,6 +16,7 @@ import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.client.event.sound.PlaySoundSourceEvent;
+import net.minecraftforge.client.event.RegisterClientReloadListenersEvent;
 
 
 
@@ -74,58 +79,71 @@ public class SoundTracker {
     }*/
 
     @SubscribeEvent
-    public static void onPlaySound(PlaySoundEvent event) { // <-- CAMBIO DE NOMBRE Y TIPO DE EVENTO
-        // 1. Filtros iniciales de seguridad
-        if (Minecraft.getInstance().level == null) {
+    public static void onPlaySound(PlaySoundEvent event) {
+        // 1. Filtros de seguridad: ignorar si no hay mundo, el sonido es nulo, es uno de nuestros propios ecos, o es música.
+        if (Minecraft.getInstance().level == null || event.getSound() == null || event.getSound() instanceof ReflectedSoundInstance || event.getSound().getSource() == SoundSource.MUSIC) {
             return;
         }
 
-        SoundInstance sound = event.getSound();
-        if (sound == null || sound instanceof ReflectedSoundInstance || sound.getSource() == SoundSource.MUSIC) {
+        SoundInstance eventSound = event.getSound();
+
+        // 2. Filtro para sonidos no posicionales: ignorar sonidos de la UI y otros sonidos relativos.
+        // Dejamos que Minecraft los reproduzca normalmente.
+        if (eventSound.isRelative()) {
             return;
         }
 
-        // 2. Comprobamos si nuestro sistema está activado (sin la comprobación de volumen que fallaba)
+        // 3. Comprobar si nuestro sistema de simulación está activado.
         if (SoundDebugger.rayEmissionEnabled) {
+            ResourceLocation location = eventSound.getLocation();
+            Vec3 pos = new Vec3(eventSound.getX(), eventSound.getY(), eventSound.getZ());
 
-            Vec3 pos = new Vec3(sound.getX(), sound.getY(), sound.getZ());
+            // --- INICIO DE LA LÓGICA DE EXTRACCIÓN SEGURA DE PROPIEDADES ---
+            // Se va directamente al SoundManager para obtener los valores base del sonido,
+            // evitando el objeto incompleto del evento.
+            SoundManager soundManager = Minecraft.getInstance().getSoundManager();
+            WeighedSoundEvents weighedSoundEvents = soundManager.getSoundEvent(location);
 
-            float pitch;
+            float volume = 1.0f;
+            float pitch = 1.0f;
 
-            try {
-                pitch = sound.getPitch();
-            } catch (NullPointerException e) {
-                pitch = 1.0f;
-            }
-
-            // 3. Guardamos el pitch para usarlo después
-            lastKnownPitches.put(sound.getLocation(), pitch);
-
-            // 4. Llamamos directamente al AcousticRayManager para generar los rayos
-            long worldTime = Minecraft.getInstance().level.getGameTime();
-            AcousticRayManager.getInstance().emitRays(pos, sound.getLocation(), worldTime);
-            AcousticRayManager.getInstance().tick(Minecraft.getInstance().level, worldTime); // Forzamos un tick para procesar los rayos inmediatamente
-            new Thread(() -> {
-                short[] convoluted = ConvolutionManager.processImpulsesFor(sound.getLocation());
-
-                if (convoluted == null || convoluted.length == 0) {
-                    System.err.println("[ERROR] Audio convolucionado vacío. No se reproduce.");
-                    return;
+            if (weighedSoundEvents != null) {
+                // Obtenemos un sonido de muestra para leer sus propiedades por defecto de sounds.json
+                Sound defaultSound = weighedSoundEvents.getSound(RandomSource.create());
+                if (defaultSound != null) {
+                    // Estos son los valores base del archivo de sonido
+                    volume = defaultSound.getVolume().sample(RandomSource.create());
+                    pitch = defaultSound.getPitch().sample(RandomSource.create());
+                } else {
+                    System.err.println("[Wavecraft] ADVERTENCIA: El evento de sonido " + location + " no tiene sonidos asociados.");
                 }
+            } else {
+                System.err.println("[Wavecraft] ADVERTENCIA: No se encontraron propiedades base para " + location + " en SoundManager. Usando valores por defecto.");
+            }
+            // --- FIN DE LA LÓGICA DE EXTRACCIÓN SEGURA ---
 
-                WavecraftDynamicSound soundToPlay = new WavecraftDynamicSound(sound.getLocation(), convoluted, sound.getVolume());
-                soundToPlay.play();
-                System.out.println("[DEBUG AUDIO] Reproducción lanzada para: " + sound.getLocation());
+            // Guardamos el pitch y encolamos el sonido para el procesamiento de rayos
+            lastKnownPitches.put(location, pitch);
+            SoundDebugger.queuedSounds.add(new SoundDebugger.QueuedSound(location, pos, volume));
 
-            }).start();
+            System.out.println("[SoundTracker] ✅ Capturado: " +
+                    location +
+                    " en " + pos +
+                    " | volumen=" + volume);
 
-
-            System.out.println("[SoundTracker] ✅ Capturado y REEMPLAZANDO: " + sound.getLocation());
+            // Cancelamos el sonido original para reemplazarlo por nuestra simulación
+            event.setSound(null);
         }
-
-        // 5. El paso CRÍTICO para REEMPLAZAR el sonido original.
-        event.setSound(null);
     }
+
+    @SubscribeEvent
+    public static void onRegisterReloadListener(RegisterClientReloadListenersEvent event) {
+        // Registramos una instancia de nuestra nueva clase.
+        System.out.println("[Wavecraft] ==> PASO 1: Registrando el SoundModificationListener.");
+
+        event.registerReloadListener(new SoundModificationListener());
+    }
+
 
     /*@SubscribeEvent
     public static void onPlaySound(PlaySoundEvent event) {

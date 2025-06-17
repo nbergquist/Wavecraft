@@ -81,6 +81,24 @@ public class WavecraftCommand {
                                     return 1;
                                 })
                         )
+                        .then(Commands.literal("setCollisionPlaneSize")
+                                // Definimos un argumento llamado "size" que debe ser un número decimal (float)
+                                .then(Commands.argument("size", FloatArgumentType.floatArg(0.1f)) // Mínimo de 0.1 para evitar tamaños nulos o negativos
+                                        .executes(context -> {
+                                            // Obtenemos el valor del argumento que el jugador ha escrito
+                                            final float newSize = FloatArgumentType.getFloat(context, "size");
+
+                                            // Actualizamos la variable estática 'dimensions' en SoundDebugger
+                                            SoundDebugger.dimensions = newSize;
+
+                                            // Enviamos un mensaje de confirmación al jugador
+                                            context.getSource().sendSuccess(() -> Component.literal("Tamaño de los planos de colisión establecido a: " + newSize), true);
+
+                                            // Devolvemos 1 para indicar que el comando se ejecutó correctamente
+                                            return 1;
+                                        })
+                                )
+                        )
                         .then(Commands.literal("enableRays")
                                 .executes(ctx -> {
                                     SoundDebugger.rayEmissionEnabled = !SoundDebugger.rayEmissionEnabled;
@@ -91,8 +109,57 @@ public class WavecraftCommand {
                                     return 1;
                                 })
                         )
-
-
+                        .then(Commands.literal("setBinauralMix")
+                                // El argumento es un factor entre 0.0 y 1.0
+                                .then(Commands.argument("factor", FloatArgumentType.floatArg(0.0f, 1.0f))
+                                        .executes(context -> {
+                                            final float newMix = FloatArgumentType.getFloat(context, "factor");
+                                            SoundDebugger.binauralMixFactor = newMix;
+                                            context.getSource().sendSuccess(() -> Component.literal("Factor de mezcla binaural establecido a: " + newMix), true);
+                                            return 1;
+                                        })
+                                )
+                        )
+                        .then(Commands.literal("setReflectionsMix")
+                                .then(Commands.argument("factor", FloatArgumentType.floatArg(0.0f)) // Mínimo 0.0
+                                        .executes(context -> {
+                                            final float newMix = FloatArgumentType.getFloat(context, "factor");
+                                            SoundDebugger.reflectionsMixFactor = newMix;
+                                            context.getSource().sendSuccess(() -> Component.literal("Mezcla de reflexiones establecida a: " + newMix), true);
+                                            return 1;
+                                        })
+                                )
+                        )
+                        .then(Commands.literal("setMasterGain")
+                                .then(Commands.argument("gain", FloatArgumentType.floatArg(0.0f)) // Mínimo 0.0
+                                        .executes(context -> {
+                                            final float newGain = FloatArgumentType.getFloat(context, "gain");
+                                            SoundDebugger.masterGain = newGain;
+                                            context.getSource().sendSuccess(() -> Component.literal("Ganancia maestra establecida a: " + newGain), true);
+                                            return 1;
+                                        })
+                                )
+                        )
+                        .then(Commands.literal("setEarlyReflectionDampen")
+                                .then(Commands.argument("factor", FloatArgumentType.floatArg(0.0f, 1.0f))
+                                        .executes(context -> {
+                                            final float newFactor = FloatArgumentType.getFloat(context, "factor");
+                                            SoundDebugger.earlyReflectionsDamp = newFactor;
+                                            context.getSource().sendSuccess(() -> Component.literal("Suavizado de ecos tempranos establecido a: " + newFactor), true);
+                                            return 1;
+                                        })
+                                )
+                        )
+                        .then(Commands.literal("setSoundRange") // <-- Nombre cambiado y más descriptivo
+                                .then(Commands.argument("multiplier", FloatArgumentType.floatArg(0.1f))
+                                        .executes(context -> {
+                                            float newMultiplier = FloatArgumentType.getFloat(context, "multiplier");
+                                            SoundDebugger.globalAttenuationMultiplier = newMultiplier;
+                                            context.getSource().sendSuccess(() -> Component.literal("Multiplicador de rango de sonido establecido a: " + newMultiplier + "x"), true);
+                                            return 1;
+                                        })
+                                )
+                        )
         );
     }
 }

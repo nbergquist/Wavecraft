@@ -31,22 +31,26 @@ public class AcousticRay {
     private long simulationExpireTick;  // cuándo dejar de calcular
     private long visualExpireTick;      // cuándo dejar de renderizar
 
-    public AcousticRay(Vec3 origin, Vec3 direction, float propagationSpeed, long currentTick, ResourceLocation soundId, int maxBounces) {
-        this.instantRay = new InstantRay(origin, direction, Float.MAX_VALUE);
-        this.visualRay = new VisualRay(instantRay, currentTick, AcousticRayManager.getSoundSpeed());
+    private int lastCaptureBounceCount = -1;
 
+    public AcousticRay(Vec3 origin, Vec3 direction, float propagationSpeed, long currentTick, ResourceLocation soundId, int maxBounces) {
         this.soundId = soundId;
         this.maxBounces = maxBounces;
 
+        this.instantRay = new InstantRay(origin, direction, Float.MAX_VALUE);
+        this.visualRay = new VisualRay(instantRay, currentTick, AcousticRayManager.getSoundSpeed());
+
+        this.simulationExpireTick = currentTick + 2;
+
         if (SoundDebugger.renderRays) {
             float distance = Math.min(instantRay.getTotalLength(), AcousticRayManager.MAX_RAY_DISTANCE);
-            long travelTimeTicks = (long) Math.ceil(distance / propagationSpeed);
-
-            this.visualExpireTick = currentTick + travelTimeTicks;
+            long travelTimeTicks = (long) Math.ceil((distance / propagationSpeed) * 20);
+            this.visualExpireTick = currentTick + travelTimeTicks + 20; // 1 segundo de margen
+            //this.simulationExpireTick = currentTick + 1;  // la simulación solo necesita 1 tick
         } else {
-            this.visualExpireTick = currentTick + 1;
+            this.visualExpireTick = this.simulationExpireTick;
+            //this.simulationExpireTick = currentTick + 2;
         }
-        this.simulationExpireTick = this.visualExpireTick;
     }
 
     public InstantRay getInstantRay() { return instantRay; }
@@ -54,8 +58,27 @@ public class AcousticRay {
 
     public ResourceLocation getSoundId() { return soundId; }
 
+    public int getLastCaptureBounceCount() {
+        return this.lastCaptureBounceCount;
+    }
+
+    public void setLastCaptureBounceCount(int bounceCount) {
+        this.lastCaptureBounceCount = bounceCount;
+    }
+
+    /**
+     * Un record anidado para almacenar todos los datos de un único vértice de la trayectoria del rayo,
+     * tal y como se reciben desde el shader de Transform Feedback.
+     */
+    public record PathPoint(
+            Vec3 position,
+            float bounceStatus,
+            Vec3 normal,
+            float debugCode
+    ) {}
+
     public class InstantRay {
-        private final List<Vec3> path = new ArrayList<>();
+        private final List<PathPoint> path = new ArrayList<>();
         private final List<Integer> bounceIndices = new ArrayList<>();
         private final float speed;
 
@@ -70,7 +93,8 @@ public class AcousticRay {
             assert player != null;
             Level level = player.level();
             // 1. Pide a RayShaderHandler que calcule la trayectoria
-            List<Vec3> trajectory = RayShaderHandler.calculateRayPath(level, player, origin, direction, speed, maxBounces);
+            List<PathPoint> trajectory = RayShaderHandler.calculateRayPath(level, player, origin, direction, AcousticRayManager.getSoundSpeed(), maxBounces);
+
 
             // 2. Guarda el resultado en patht/
             this.path.clear();
@@ -78,13 +102,22 @@ public class AcousticRay {
         }
 
 
-        public List<Vec3> getPath() { return path; }
+        public List<Vec3> getPath() {
+            List<Vec3> positions = new ArrayList<>();
+            for (PathPoint p : path) {
+                positions.add(p.position());
+            }
+            return positions;
+        }
         public List<Integer> getBounceIndices() { return bounceIndices; }
+        public List<PathPoint> getPathPoints() { return path; }
 
         public float getTotalLength() {
             float total = 0;
-            for (int i = 1; i < path.size(); i++)
-                total += (float) path.get(i).distanceTo(path.get(i-1));
+            for (int i = 1; i < path.size(); i++) {
+                // Accedemos al campo .position() de cada PathPoint antes de calcular la distancia
+                total += (float) path.get(i).position().distanceTo(path.get(i - 1).position());
+            }
             return total;
         }
 

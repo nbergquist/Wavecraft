@@ -21,7 +21,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.Level;
-import org.apache.commons.math3.complex.Complex;
+//import org.apache.commons.math3.complex.Complex;
 import org.apache.commons.math3.transform.DftNormalization;
 import org.apache.commons.math3.transform.FastFourierTransformer;
 import org.apache.commons.math3.transform.TransformType;
@@ -38,6 +38,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.concurrent.CompletableFuture;
+
+//import edu.emory.mathcs.jtransforms.fft.DoubleFFT_1D;
 
 
 public class ConvolutionManager {
@@ -65,6 +67,7 @@ public class ConvolutionManager {
         private final long seed;
         private final FloatArrayList taps = new FloatArrayList();
         private final int sampleRate = 44100; // mismo que los OGG vanilla
+        private int captureCount = 0;
 
         private final int maxIRLengthSamples = (int)(2.0 * sampleRate); // Límite de 2 segundos
 
@@ -81,25 +84,57 @@ public class ConvolutionManager {
         public void add(RayImpulseCapture c) {
             int index = Math.round(c.timeSeconds() * sampleRate);
 
-            // Si el eco llega más tarde del límite, lo ignoramos por completo.
-            // Esto evita que el array crezca demasiado y cause el error de memoria.
             if (index >= maxIRLengthSamples) {
                 return;
             }
 
+            // Calculamos la amplitud base del impulso.
+            float added = c.weight() * c.totalAttenuation() * SoundDebugger.masterGain;
+
+            // --- INICIO DE LA NUEVA LÓGICA DE SUAVIZADO ---
+            // Definimos una ventana para los ecos tempranos (p.ej., los primeros 25ms)
+            final float earlyReflectionsWindowMs = 25.0f;
+            float impulseTimeMs = c.timeSeconds() * 1000.0f;
+
+            if (impulseTimeMs < earlyReflectionsWindowMs) {
+                // Si el eco está en la ventana, calculamos un factor de atenuación.
+                // El factor aumenta linealmente de (1 - dampen) a 1.0 a lo largo de la ventana.
+                // Esto hace que los primerísimos ecos sean los más atenuados.
+                float lerpFactor = impulseTimeMs / earlyReflectionsWindowMs; // Va de 0.0 a 1.0
+                float dampening = 1.0f - (SoundDebugger.earlyReflectionsDamp * (1.0f - lerpFactor));
+                added *= dampening;
+            }
+            // --- FIN DE LA NUEVA LÓGICA ---
+
             ensureSize(index);
             float current = taps.getFloat(index);
-            //float added = c.weight() * c.totalAttenuation();
-            float added = c.weight() * c.totalAttenuation() * 50.0f;
             taps.set(index, current + added);
         }
 
         public short[] bakePCM() {
+            if (taps.isEmpty()) {
+                return new short[0];
+            }
+
+            // Usamos la normalización de pico simple para evitar clipping.
+            float maxAmplitude = 0.0f;
+            for (int i = 0; i < taps.size(); i++) {
+                if (Math.abs(taps.getFloat(i)) > maxAmplitude) {
+                    maxAmplitude = Math.abs(taps.getFloat(i));
+                }
+            }
+
+            float peakNormalizationFactor = 1.0f;
+            if (maxAmplitude > 1.0f) {
+                peakNormalizationFactor = 1.0f / maxAmplitude;
+            }
+
             short[] pcm = new short[taps.size()];
             for (int i = 0; i < pcm.length; i++) {
-                float clamped = clamp(taps.getFloat(i), -1f, 1f);
-                pcm[i] = (short) Math.round(clamped * 32767);
+                float finalSample = taps.getFloat(i) * peakNormalizationFactor;
+                pcm[i] = (short) Math.round(finalSample * 32767);
             }
+
             return pcm;
         }
 
@@ -130,6 +165,9 @@ public class ConvolutionManager {
         Map<String, IRBuilder> responsesToProcess = new HashMap<>(impulseResponses);
         // ...y limpiamos el original inmediatamente para que pueda recibir nuevos sonidos.
         impulseResponses.clear();
+        // Le decimos al manager de rayos que hemos terminado con este lote,
+        // para que pueda aceptar nuevos rayos directos en el siguiente.
+        AcousticRayManager.getInstance().onResponsesProcessed();
 
         for (IRBuilder irBuilder : responsesToProcess.values()) {
 
@@ -168,7 +206,7 @@ public class ConvolutionManager {
                 if (result != null) {
                     // 6. Reproducir el audio ya procesado. Esta parte es rápida.
                     playRawPCM(result.pcm(), result.sampleRate(), result.isRightEar());
-                    System.out.println("[DEBUG AUDIO] Reproduciendo audio convolucionado...");
+                    //System.out.println("[DEBUG AUDIO] Reproduciendo audio convolucionado...");
 
                 }
 
@@ -387,94 +425,60 @@ public class ConvolutionManager {
         return finalPcm;
     }*/
 
+    // EN: ConvolutionManager.java
+
     private static short[] convolve(short[] x, short[] h) {
+        //System.out.println("[DEBUG 1 AUTOCONTENIDO] Inicio convolución. Señal=" + x.length + ", IR=" + h.length);
 
-        System.out.println("[DEBUG 1] Inicio convolución. Señal=" +
-                (x != null ? x.length : "null") + ", IR=" + (h != null ? h.length : "null"));
+        if (x == null || x.length == 0 || h == null || h.length == 0) return null;
 
-        if (x == null || x.length == 0 || h == null || h.length == 0) {
-            System.err.println("[ERROR] Señal o IR nulas o vacías.");
-            return null;
+        int resultLength = x.length + h.length - 1;
+        int fftSize = Integer.highestOneBit(resultLength - 1) << 1;
+        //System.out.println("[DEBUG 2 AUTOCONTENIDO] fftSize=" + fftSize);
+
+        // 1. Preparar arrays complejos
+        Complex[] xComplex = new Complex[fftSize];
+        for (int i = 0; i < x.length; i++) xComplex[i] = new Complex(x[i] / 32767.0, 0);
+        for (int i = x.length; i < fftSize; i++) xComplex[i] = new Complex(0, 0);
+
+        Complex[] hComplex = new Complex[fftSize];
+        for (int i = 0; i < h.length; i++) hComplex[i] = new Complex(h[i] / 32767.0, 0);
+        for (int i = h.length; i < fftSize; i++) hComplex[i] = new Complex(0, 0);
+
+        // 2. Calcular FFT usando nuestras nuevas clases
+        //System.out.println("[DEBUG 3 AUTOCONTENIDO] Transformando señal...");
+        Complex[] X_fft = Fft.fft(xComplex);
+        //System.out.println("[DEBUG 4 AUTOCONTENIDO] Transformando IR...");
+        Complex[] H_fft = Fft.fft(hComplex);
+
+        // 3. Multiplicar en frecuencia
+        Complex[] Y_fft = new Complex[fftSize];
+        for (int i = 0; i < fftSize; i++) {
+            Y_fft[i] = X_fft[i].times(H_fft[i]);
         }
 
-        final int BLOCK = 8192;
-        final int fftSize = Integer.highestOneBit(BLOCK + x.length - 1) << 1;
+        // 4. Calcular IFFT
+        //System.out.println("[DEBUG 5 AUTOCONTENIDO] Transformando de vuelta al tiempo...");
+        Complex[] y_complex = Fft.ifft(Y_fft);
 
-        System.out.println("[DEBUG 2] fftSize=" + fftSize + " (BLOCK=" + BLOCK + ")");
+        // --- NUEVO BLOQUE FINAL (SIN NORMALIZACIÓN DE PICO) ---
+        // 5. Convertir a short y recortar para evitar saturación (clamping)
+        //System.out.println("[DEBUG 6 AUTOCONTENIDO] Recortando y convirtiendo resultado...");
 
-        FastFourierTransformer fft = new FastFourierTransformer(DftNormalization.STANDARD);
+        short[] pcm = new short[resultLength];
+        for (int i = 0; i < resultLength; i++) {
+            // Obtenemos la muestra del resultado de la convolución.
+            // Su volumen ya está determinado por la atenuación y la ganancia maestra.
+            double sample = y_complex[i].re();
 
-        Complex[] xPad = new Complex[fftSize];
-        for (int i = 0; i < x.length; i++) {
-            xPad[i] = new Complex(x[i] / 32767.0, 0);
-        }
-        for (int i = x.length; i < fftSize; i++) {
-            xPad[i] = Complex.ZERO;
-        }
+            // Clamp: Aseguramos que la muestra no exceda el rango [-1, 1] para evitar distorsión.
+            sample = Math.max(-1.0, Math.min(1.0, sample));
 
-        System.out.println("[DEBUG 3] FFT de la señal original");
-        Complex[] X = fft.transform(xPad, TransformType.FORWARD);
-
-        double[] y = new double[x.length + h.length - 1];
-        System.out.println("[DEBUG 4] Búfer de salida preparado. Tamaño: " + y.length);
-
-        for (int start = 0; start < h.length; start += BLOCK) {
-            int size = Math.min(BLOCK, h.length - start);
-            System.out.println("[DEBUG 5] Bloque IR desde " + start + " tamaño " + size);
-
-            Complex[] hPad = new Complex[fftSize];
-            for (int i = 0; i < size; i++) {
-                hPad[i] = new Complex(h[start + i] / 32767.0, 0);
-            }
-            for (int i = size; i < fftSize; i++) {
-                hPad[i] = Complex.ZERO;
-            }
-
-            Complex[] H = fft.transform(hPad, TransformType.FORWARD);
-
-            for (int i = 0; i < fftSize; i++) {
-                H[i] = X[i].multiply(H[i]);
-            }
-
-            Complex[] block = fft.transform(H, TransformType.INVERSE);
-
-            for (int i = 0; i < block.length; i++) {
-                int outIdx = start + i;
-                if (outIdx < y.length) {
-                    y[outIdx] += block[i].getReal() / fftSize;
-                } else {
-                    System.err.println("[WARNING] outIdx fuera de rango: " + outIdx);
-                }
-            }
-
-            System.out.println("[DEBUG 6] Procesado bloque IR hasta índice " + (start + size - 1));
+            // Convertimos al formato de audio de 16-bit.
+            pcm[i] = (short) Math.round(sample * 32767);
         }
 
-        System.out.println("[DEBUG 7] Normalización y cuantización");
-        double max = 1e-12;
-        for (double v : y) {
-            if (Double.isNaN(v) || Double.isInfinite(v)) {
-                System.err.println("[ERROR] Valor inválido en salida de convolución: " + v);
-            }
-            max = Math.max(max, Math.abs(v));
-        }
-
-        System.out.println("[DEBUG 8] Máximo absoluto en y = " + max);
-
-        short[] pcm = new short[y.length];
-        for (int i = 0; i < y.length; i++) {
-            double scaled = y[i] / max;
-            scaled = Math.max(-1.0, Math.min(1.0, scaled));
-            pcm[i] = (short) Math.round(scaled * 32767);
-
-            // Validación extra
-            if (Float.isNaN(pcm[i]) || Float.isInfinite(pcm[i])) {
-                System.err.println("[ERROR] Valor inválido en pcm[" + i + "] = " + pcm[i]);
-                pcm[i] = 0;
-            }
-        }
-
-        System.out.println("[DEBUG 9] Convolución finalizada. Longitud PCM: " + pcm.length);
+        //System.out.println("[DEBUG 7 AUTOCONTENIDO] Convolución finalizada.");
         return pcm;
     }
 

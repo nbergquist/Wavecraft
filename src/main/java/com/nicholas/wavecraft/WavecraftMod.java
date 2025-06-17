@@ -5,6 +5,8 @@ import com.nicholas.wavecraft.config.WavecraftConfig;
 import com.nicholas.wavecraft.debug.CacheEventHandler;
 import com.nicholas.wavecraft.debug.SoundDebugger;
 import com.nicholas.wavecraft.sound.RayShaderHandler;
+import com.nicholas.wavecraft.sound.SoundModificationListener;
+import net.minecraftforge.client.event.RegisterClientReloadListenersEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
@@ -29,6 +31,7 @@ public class WavecraftMod {
 
         // --- Eventos del Ciclo de Vida del Mod (se registran en el MOD bus) ---
         modEventBus.addListener(this::onClientSetup);
+        //modEventBus.addListener(this::onRegisterReloadListeners);
 
         // --- Eventos del Juego (se registran en el FORGE bus) ---
         // Registramos instancias de nuestras clases que contienen lógica de eventos.
@@ -61,4 +64,9 @@ public class WavecraftMod {
         WavecraftCommand.register(event.getDispatcher());
         LOGGER.info("Comandos de Wavecraft registrados.");
     }
+
+    /*public void onRegisterReloadListeners(final RegisterClientReloadListenersEvent event) {
+        System.out.println("[Wavecraft] ==> PASO 1: Registrando el SoundModificationListener (MÉTODO EXPLÍCITO).");
+        event.registerReloadListener(new SoundModificationListener());
+    }*/
 }

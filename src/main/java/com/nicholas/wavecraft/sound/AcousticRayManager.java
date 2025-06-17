@@ -4,14 +4,16 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.nicholas.wavecraft.debug.SoundDebugger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Random;
+import java.util.*;
 
 import static com.nicholas.wavecraft.debug.SoundDebugger.renderRays;
 
@@ -37,6 +39,8 @@ public class AcousticRayManager {
     //public final List<RayImpulseCapture> impulseLeft = new ArrayList<>();
     //public final List<RayImpulseCapture> impulseRight = new ArrayList<>();
 
+    // Este Set guardará las claves de los sonidos cuyo rayo directo ya hemos procesado.
+    private final Set<String> directPathProcessed = new HashSet<>();
 
     private static float soundSpeed = 343.0f;
 
@@ -44,10 +48,10 @@ public class AcousticRayManager {
         return soundSpeed;
     }
 
-    private static int numRays = 1;
+    private static int numRays = 100;
     private static final int MAX_RAYS = 10000;
-    public static final float MAX_RAY_DISTANCE = 500.0f;
-    private static final int   MAX_RAY_BOUNCES  = 20;
+    public static final float MAX_RAY_DISTANCE = 1000.0f;
+    private static final int   MAX_RAY_BOUNCES  = 40;
 
     public static int getNumRays() {
         return numRays;
@@ -101,15 +105,16 @@ public class AcousticRayManager {
             Iterator<AcousticRay> it = activeRays.iterator();
             while (it.hasNext()) {
                 AcousticRay ray = it.next();
-                if (ray.isExpired(currentTick)) {
+                if (!ray.isExpired(currentTick)) {
+                    // 1. Procesar la trayectoria del rayo mientras esté activo
+                    checkRayPlaneIntersections(ray, player, level, currentTick);
+                } else {
+                    // 2. El rayo terminó su simulación; manejar visualización y limpieza
                     if (renderRays && !ray.isVisualExpired(currentTick)) {
                         SoundDebugger.addVisualRay(ray, currentTick);
                     }
-                    if (!ray.isExpired(currentTick)) {
-                        checkRayPlaneIntersections(ray, player, currentTick);
-                    }
                     if (ray.isVisualExpired(currentTick)) {
-                        it.remove(); // solo borrar cuando ya no se necesita ni para renderizar
+                        it.remove();
                     }
                 }
             }
@@ -120,10 +125,12 @@ public class AcousticRayManager {
     public void spawnRay(Vec3 origin, Vec3 direction, float speed, long currentTick, ResourceLocation soundId) {
         // Añade un bloque sincronizado aquí para evitar la race condition
         synchronized (activeRays) {
-            AcousticRay ray = new AcousticRay(origin, direction, speed, currentTick, soundId, MAX_RAY_BOUNCES);
-            //activeRays.add(ray);
-            synchronized (pendingRays) {
-                pendingRays.add(ray);
+            if (activeRays.size() < MAX_RAYS) {
+                AcousticRay ray = new AcousticRay(origin, direction, speed, currentTick, soundId, MAX_RAY_BOUNCES);
+                //activeRays.add(ray);
+                synchronized (pendingRays) {
+                    pendingRays.add(ray);
+                }
             }
         }
     }
@@ -143,7 +150,8 @@ public class AcousticRayManager {
             //RenderSystem.recordRenderCall(() -> {
             //    manager.spawnRay(safeStartPos, dir, getSoundSpeed(), currentTick, soundId);
             //});
-            manager.spawnRay(safeStartPos, dir, getSoundSpeed(), currentTick, soundId);
+            //manager.spawnRay(safeStartPos, dir, getSoundSpeed(), currentTick, soundId);
+            this.spawnRay(safeStartPos, dir, getSoundSpeed(), currentTick, soundId);
         }
     }
 
@@ -160,82 +168,169 @@ public class AcousticRayManager {
      * Comprueba cada segmento de un rayo contra los tres planos ortogonales del jugador.
      * Si encuentra una intersección válida que no ha sido procesada, genera un impulso.
      */
-    private void checkRayPlaneIntersections(AcousticRay ray, LocalPlayer player, long currentTick) {
-        List<Vec3> path = ray.getInstantRay().getPath();
+    private void checkRayPlaneIntersections(AcousticRay ray, LocalPlayer player, Level level, long currentTick) {
+        List<AcousticRay.PathPoint> path = ray.getInstantRay().getPathPoints();
         if (path.size() < 2) return;
 
-        Vec3 playerPos = player.getEyePosition(); // El centro de los planos de colisión
-
-        // --- LÓGICA CORREGIDA: OBTENER NORMALES DINÁMICAS DEL JUGADOR ---
-        // Estos vectores cambian cada tick según hacia dónde mire el jugador.
-        Vec3 lookVec = player.getViewVector(1.0f);     // Normal del plano XY local del jugador
-        Vec3 rightVec = lookVec.cross(new Vec3(0, 1, 0)).normalize(); // Normal del plano YZ local del jugador
-        Vec3 upVec = player.getUpVector(1.0f);         // Normal del plano XZ local del jugador
+        Vec3 playerPos = player.getEyePosition();
+        Vec3 lookVec = player.getViewVector(1.0f);
+        Vec3 rightVec = lookVec.cross(new Vec3(0, 1, 0)).normalize();
+        Vec3 upVec = player.getUpVector(1.0f);
 
         float cumulativeDistance = 0f;
+        int bounceCount = 0;
+        float reflectionAttenuation = 1.0f; // La energía del rayo, empieza al 100%
 
         for (int i = 0; i < path.size() - 1; i++) {
-            if (ray.hasSegmentBeenProcessed(i)) {
-                cumulativeDistance += (float) path.get(i).distanceTo(path.get(i+1));
-                continue;
+            AcousticRay.PathPoint startPoint = path.get(i);
+            Vec3 start = startPoint.position();
+            Vec3 end = path.get(i + 1).position();
+
+            // Si el punto anterior fue un rebote, calculamos la pérdida de energía
+            if (i > 0 && startPoint.bounceStatus() == 2.0f) {
+                bounceCount++;
+
+                // --- LÓGICA PARA OBTENER EL BLOQUE CORRECTO ---
+                // Retrocedemos un poco desde el punto de impacto en la dirección opuesta a la normal
+                // para asegurarnos de que estamos dentro del bloque sólido y no en el aire adyacente.
+                BlockPos hitBlockPos = BlockPos.containing(startPoint.position().subtract(startPoint.normal().scale(0.01)));
+                Block hitBlock = level.getBlockState(hitBlockPos).getBlock();
+
+                float absorption = MaterialProperties.getAbsorptionCoefficient(hitBlock);
+                reflectionAttenuation *= (1.0f - absorption); // La energía se multiplica por el factor de REFLEXIÓN
             }
 
-            Vec3 start = path.get(i);
-            Vec3 end = path.get(i + 1);
+            // --- LÓGICA PARA DETENER EL RAYO ---
+            // Si la energía del rayo es casi nula, detenemos su procesamiento aquí mismo.
+            if (reflectionAttenuation < 0.01f) { // Umbral del 1% de energía
+                break; // Salimos del bucle 'for', el resto del camino es inaudible.
+            }
 
-            // Comprobar contra cada uno de los 3 planos orientados con el jugador
-            findIntersection(start, end, playerPos, rightVec, RayImpulseCapture.Plane.YZ, cumulativeDistance, ray, currentTick, i);
-            findIntersection(start, end, playerPos, upVec, RayImpulseCapture.Plane.XZ, cumulativeDistance, ray, currentTick, i);
-            findIntersection(start, end, playerPos, lookVec, RayImpulseCapture.Plane.XY, cumulativeDistance, ray, currentTick, i);
+            findIntersection(level, start, end, playerPos, rightVec, lookVec, upVec, rightVec, RayImpulseCapture.Plane.YZ, cumulativeDistance, ray, currentTick, i, bounceCount, reflectionAttenuation);
+            findIntersection(level, start, end, playerPos, upVec, lookVec, rightVec, rightVec, RayImpulseCapture.Plane.XZ, cumulativeDistance, ray, currentTick, i, bounceCount, reflectionAttenuation);
+            findIntersection(level, start, end, playerPos, lookVec, upVec, rightVec, rightVec, RayImpulseCapture.Plane.XY, cumulativeDistance, ray, currentTick, i, bounceCount, reflectionAttenuation);
 
             cumulativeDistance += (float) start.distanceTo(end);
         }
     }
 
+
     /**
      * Calcula si un segmento de línea intersecta un plano y, si lo hace, genera un RayImpulseCapture.
      */
-    private void findIntersection(Vec3 start, Vec3 end, Vec3 planeOrigin, Vec3 planeNormal, RayImpulseCapture.Plane planeType, float distanceSoFar, AcousticRay ray, long currentTick, int segmentIndex) {
+    private void findIntersection(
+            Level level,
+            Vec3 start, Vec3 end,
+            Vec3 planeOrigin, Vec3 planeNormal,
+            Vec3 surfaceAxis1, Vec3 surfaceAxis2,
+            Vec3 rightVec,
+            RayImpulseCapture.Plane planeType,
+            float distanceSoFar,
+            AcousticRay ray,
+            long currentTick,
+            int segmentIndex,
+            int bounceCountSoFar,
+            float reflectionAttenuation // Parámetro de la atenuación por materiales
+    ) {
         Vec3 segmentDir = end.subtract(start);
         double dotProduct = segmentDir.dot(planeNormal);
 
-        if (Math.abs(dotProduct) < 1e-6) {
-            return;
-        }
+        if (Math.abs(dotProduct) < 1e-6) return;
 
         Vec3 startToPlane = planeOrigin.subtract(start);
         double t = startToPlane.dot(planeNormal) / dotProduct;
 
+        // Comprueba si la intersección ocurre DENTRO del segmento de línea
         if (t >= 0 && t <= 1) {
             Vec3 intersectionPoint = start.add(segmentDir.scale(t));
 
-            // Marcar el segmento como procesado para este tipo de plano para evitar duplicados.
-            // (Una implementación más robusta podría usar un objeto más complejo que un simple Set<Integer>)
-            ray.markSegmentAsProcessed(segmentIndex);
+            // Comprueba si la intersección ocurre DENTRO de los límites del plano
+            Vec3 localHitPos = intersectionPoint.subtract(planeOrigin);
+            float halfDim = SoundDebugger.dimensions / 2.0f;
+            if (Math.abs(localHitPos.dot(surfaceAxis1)) > halfDim || Math.abs(localHitPos.dot(surfaceAxis2)) > halfDim) {
+                return;
+            }
 
-            // ... El resto de la lógica para crear y añadir el RayImpulseCapture es la misma ...
-            double distInSegment = start.distanceTo(intersectionPoint);
-            double totalDistance = distanceSoFar + distInSegment;
-            float timeSeconds = (float) (totalDistance / getSoundSpeed());
+            // --- INICIO DE LA LÓGICA DE CAPTURA AVANZADA ---
 
-            boolean isRightEar = (planeType == RayImpulseCapture.Plane.YZ && dotProduct > 0);
+            // Regla #1: ¿Ya hemos capturado un impulso para este rayo en este MISMO nivel de rebote?
+            if (bounceCountSoFar == ray.getLastCaptureBounceCount()) {
+                return;
+            }
 
-            RayImpulseCapture capture = new RayImpulseCapture(
-                    ray.getSoundId(),
-                    ray.getInstantRay().getPath().get(0),
-                    totalDistance,
-                    intersectionPoint,
-                    0,
-                    timeSeconds,
-                    ray.getInstantRay().getBounceIndices().size(),
-                    1.0f,
-                    planeType,
-                    1.0f,
-                    isRightEar
-            );
+            // Regla #2: Comprobación de Línea de Visión (Raycast)
+            Vec3 lastBouncePoint = (bounceCountSoFar == 0) ? ray.getInstantRay().getPathPoints().get(0).position() : start;
+            ClipContext context = new ClipContext(lastBouncePoint, planeOrigin, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, null);
+            if (level.clip(context).getType() == HitResult.Type.BLOCK) {
+                return; // ¡No hay impulso si el eco está bloqueado por un muro!
+            }
 
-            ConvolutionManager.addCapture(capture, currentTick);
+            // --- CÁLCULOS FINALES (si hemos pasado todos los filtros) ---
+
+            double virtualLegDistance = lastBouncePoint.distanceTo(planeOrigin);
+            double totalVirtualDistance = distanceSoFar + virtualLegDistance;
+            float timeSeconds = (float) (totalVirtualDistance / getSoundSpeed());
+
+            // Atenuación por distancia (ley de la inversa)
+            float distanceAttenuation = 1.0f / (float) Math.max(1.0, totalVirtualDistance);
+
+            // Factor de mezcla para las reflexiones
+            float reflectionMix = 1.0f;
+            if (bounceCountSoFar > 0) {
+                reflectionMix = SoundDebugger.reflectionsMixFactor;
+            }
+
+            // La atenuación final es el producto de todos los factores: distancia, material y mezcla.
+            float finalAttenuation = distanceAttenuation * reflectionAttenuation * reflectionMix;
+
+            // Cálculo de pesos binaurales
+            float panFactor = (float)Math.max(-1.0, Math.min(1.0, localHitPos.dot(rightVec) / halfDim));
+            float mix = SoundDebugger.binauralMixFactor;
+            float finalWeightRight = (0.5f * (1.0f + panFactor)) * (1.0f - mix) + 0.5f * mix;
+            float finalWeightLeft = (0.5f * (1.0f - panFactor)) * (1.0f - mix) + 0.5f * mix;
+
+            // --- CREACIÓN Y ENVÍO DE IMPULSOS ---
+
+            boolean impulseGenerated = false;
+            Vec3 sourcePosition = ray.getInstantRay().getPathPoints().get(0).position();
+
+            // Impulso para el oído izquierdo
+            if (finalWeightLeft > 0.01f) {
+                boolean isDirectPath = (bounceCountSoFar == 0);
+                String directPathKeyLeft = ray.getSoundId().toString() + "_L";
+                if (!isDirectPath || !directPathProcessed.contains(directPathKeyLeft)) {
+                    if (isDirectPath) directPathProcessed.add(directPathKeyLeft);
+                    RayImpulseCapture captureLeft = new RayImpulseCapture(ray.getSoundId(), sourcePosition, totalVirtualDistance, intersectionPoint, 0, timeSeconds, bounceCountSoFar, finalAttenuation, planeType, finalWeightLeft, false);
+                    ConvolutionManager.addCapture(captureLeft, currentTick);
+                    impulseGenerated = true;
+                }
+            }
+
+            // Impulso para el oído derecho
+            if (finalWeightRight > 0.01f) {
+                boolean isDirectPath = (bounceCountSoFar == 0);
+                String directPathKeyRight = ray.getSoundId().toString() + "_R";
+                if (!isDirectPath || !directPathProcessed.contains(directPathKeyRight)) {
+                    if (isDirectPath) directPathProcessed.add(directPathKeyRight);
+                    RayImpulseCapture captureRight = new RayImpulseCapture(ray.getSoundId(), sourcePosition, totalVirtualDistance, intersectionPoint, 0, timeSeconds, bounceCountSoFar, finalAttenuation, planeType, finalWeightRight, true);
+                    ConvolutionManager.addCapture(captureRight, currentTick);
+                    impulseGenerated = true;
+                }
+            }
+
+            // Si hemos generado al menos un impulso, actualizamos la memoria del rayo.
+            if (impulseGenerated) {
+                ray.setLastCaptureBounceCount(bounceCountSoFar);
+            }
         }
+    }
+
+    /**
+     * Se llama cuando los impulsos de un evento de sonido ya se han procesado,
+     * para limpiar el registro de rayos directos y prepararse para el siguiente sonido.
+     */
+    public void onResponsesProcessed() {
+        directPathProcessed.clear();
     }
 
     /**

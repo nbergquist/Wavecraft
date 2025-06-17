@@ -122,6 +122,11 @@ repositories {
     // }
 
     mavenCentral()
+    //maven { url "https://repository.sonatype.org/content/repositories/public/" }
+
+    flatDir {
+        dirs 'libs'
+    }
 }
 
 dependencies {
@@ -148,6 +153,9 @@ dependencies {
     // http://www.gradle.org/docs/current/userguide/dependency_management.html
 
     implementation 'org.apache.commons:commons-math3:3.6.1'
+    //implementation 'com.github.wendykierp:JTransforms:3.1'
+    //implementation files('libs/JTransforms-3.1.jar')
+    //implementation name: 'JTransforms-3.1'
 }
 
 // This block of code expands all declared replace properties in the specified resource targets.

@@ -5,14 +5,11 @@ import com.nicholas.wavecraft.sound.*;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.*;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import com.mojang.blaze3d.vertex.VertexConsumer; // Importar desde Minecraft
 import net.minecraft.sounds.SoundSource;
@@ -26,20 +23,14 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
 import org.joml.Matrix4f;
-import org.joml.Vector4f;
 import org.lwjgl.BufferUtils;
-import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL15;
-import org.lwjgl.opengl.GL20;
 
 import com.mojang.blaze3d.systems.RenderSystem;
-import org.lwjgl.opengl.GL30;
 
 
 import java.nio.FloatBuffer;
 import java.util.*;
 
-import static net.minecraft.core.RegistryAccess.LOGGER;
 import static org.lwjgl.opengl.ARBVertexArrayObject.glBindVertexArray;
 import static org.lwjgl.opengl.ARBVertexArrayObject.glGenVertexArrays;
 import static org.lwjgl.opengl.GL15C.glGenBuffers;
@@ -72,7 +63,15 @@ public class SoundDebugger {
     public static boolean renderCollisionPlanes = false;
     public static boolean renderTextureSlice = true;
 
-    public static float dimensions = 5.0f;
+    public static float binauralMixFactor = 0.7f;
+    public static float reflectionsMixFactor = 1f;
+    public static float masterGain = 50;
+    //public static float targetReverbLevel = 0.15f;
+    public static float earlyReflectionsDamp = 0.6f;
+
+    public static float globalAttenuationMultiplier = 4f;
+
+    public static float dimensions = 50.0f;
 
     public static int renderProgram;  // Shader para visualizar los rayos
 
@@ -244,9 +243,11 @@ public class SoundDebugger {
             }
         }
 
-        if (!renderRays) { // Si la flag principal está desactivada, no hacer nada más.
+        if (!renderRays && !renderCollisionPlanes) { // Si la flag principal está desactivada, no hacer nada más.
             return;
         }
+
+        final PoseStack poseStack = event.getPoseStack();
 
         // Elige UN solo stage para probar. AFTER_PARTICLES o AFTER_SKY.
         if (event.getStage() == RenderLevelStageEvent.Stage.AFTER_PARTICLES) {
@@ -263,6 +264,37 @@ public class SoundDebugger {
             if (renderTextureSlice) {
                 renderTextureSliceForDebug(event.getPoseStack());
             }
+        }
+
+        if (renderCollisionPlanes && event.getStage() == RenderLevelStageEvent.Stage.AFTER_PARTICLES) {
+            //Minecraft mc = Minecraft.getInstance();
+            Camera camera = mc.gameRenderer.getMainCamera();
+            Vec3 camPos = camera.getPosition();
+            Vec3 playerPos = mc.player.position(); // Usar la posición del jugador para el origen de los planos
+
+            MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
+            VertexConsumer lineBuffer = bufferSource.getBuffer(RenderType.lines());
+
+            poseStack.pushPose();
+            // Mover el sistema de coordenadas para que el origen (0,0,0) sea la posición de la cámara
+            poseStack.translate(-camPos.x, -camPos.y, -camPos.z);
+
+            // Ahora, posicionar los planos en la ubicación del jugador
+            poseStack.translate(playerPos.x, playerPos.y + mc.player.getEyeHeight(), playerPos.z);
+
+            // Aplicar la rotación de la cámara para que los planos roten con el jugador
+            poseStack.mulPose(camera.rotation());
+            Matrix4f matrix = poseStack.last().pose();
+
+            float half = dimensions / 2.0f;
+
+            // Dibujar los tres planos ortogonales
+            drawSquare(lineBuffer, matrix, Vec3.ZERO, half, 'Z'); // Plano XY (frontal)
+            drawSquare(lineBuffer, matrix, Vec3.ZERO, half, 'Y'); // Plano XZ (superior/inferior)
+            drawSquare(lineBuffer, matrix, Vec3.ZERO, half, 'X'); // Plano YZ (lateral)
+
+            poseStack.popPose();
+            bufferSource.endBatch(RenderType.lines());
         }
     }
 

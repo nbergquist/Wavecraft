@@ -311,10 +311,12 @@ public class RayShaderHandler {
     }
 
 
-    public static List<Vec3> calculateRayPath(Level level, LocalPlayer player, Vec3 origin, Vec3 direction, float speed, int maxBounces) {
-        System.out.println("[DEBUG] Thread in calculateRayPath: " + Thread.currentThread().getName());
+    public static List<AcousticRay.PathPoint> calculateRayPath(Level level, LocalPlayer player, Vec3 origin, Vec3 direction, float speed, int maxBounces) {
+        //System.out.println("[DEBUG] Thread in calculateRayPath: " + Thread.currentThread().getName());
+        //maxBounces = 4;
+        //System.out.println("[DEBUG] calculateRayPath maxBounces = " + maxBounces);
         int localDummyVAO = -1;
-        List<Vec3> trajectory = new ArrayList<>(); // Declara trajectory aquí para que esté en el scope del return del try y del catch/finally (aunque en catch devuelves una nueva)
+        List<AcousticRay.PathPoint> trajectory = new ArrayList<>(); // Declara trajectory aquí para que esté en el scope del return del try y del catch/finally (aunque en catch devuelves una nueva)
 
         int dummyVBO = -1;
         try {
@@ -395,13 +397,26 @@ public class RayShaderHandler {
                 }
             }
 
+            int strideInFloats = 24; // El número total de floats por vértice
+
             // 7. PROCESAR TRAYECTORIA
             for (int i = 0; i < numVertices; i++) {
-                float px = buffer.get(), py = buffer.get(), pz = buffer.get();
-                if (px != 0 || py != 0 || pz != 0) { // Añadir solo puntos válidos
-                    trajectory.add(new Vec3(px, py, pz));
+                int baseIndex = i * strideInFloats;
+
+                // Leemos todos los datos relevantes del buffer para cada punto
+                Vec3 pos = new Vec3(buffer.get(baseIndex), buffer.get(baseIndex + 1), buffer.get(baseIndex + 2));
+                float status = buffer.get(baseIndex + 3);
+                Vec3 normal = new Vec3(buffer.get(baseIndex + 4), buffer.get(baseIndex + 5), buffer.get(baseIndex + 6));
+                float debug = buffer.get(baseIndex + 10); // O el índice que corresponda a tu debugCode
+
+                // Creamos y añadimos el nuevo objeto PathPoint
+                trajectory.add(new AcousticRay.PathPoint(pos, status, normal, debug));
+
+                // Imprimir en log si el debug está activado
+                if (WavecraftConfig.DEBUG_SHADER_OUTPUT.get()) {
+                    System.out.printf("Punto %d: Pos(%.2f, %.2f, %.2f), Status(%.1f), Normal(%.2f, %.2f, %.2f)\n",
+                            i, pos.x, pos.y, pos.z, status, normal.x, normal.y, normal.z);
                 }
-                buffer.position(buffer.position() + 21);
             }
             return trajectory;
 
