@@ -65,7 +65,7 @@ public class SoundDebugger {
 
     public static float binauralMixFactor = 0.7f;
     public static float reflectionsMixFactor = 1f;
-    public static float masterGain = 50;
+    public static float masterGain = 1;
     //public static float targetReverbLevel = 0.15f;
     public static float earlyReflectionsDamp = 0.6f;
 

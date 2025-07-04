@@ -186,30 +186,35 @@ public class AcousticRayManager {
             Vec3 start = startPoint.position();
             Vec3 end = path.get(i + 1).position();
 
-            // Si el punto anterior fue un rebote, calculamos la pérdida de energía
+            // 1. ACTUALIZAR la energía si hubo un rebote al inicio de este segmento.
             if (i > 0 && startPoint.bounceStatus() == 2.0f) {
                 bounceCount++;
 
-                // --- LÓGICA PARA OBTENER EL BLOQUE CORRECTO ---
-                // Retrocedemos un poco desde el punto de impacto en la dirección opuesta a la normal
-                // para asegurarnos de que estamos dentro del bloque sólido y no en el aire adyacente.
                 BlockPos hitBlockPos = BlockPos.containing(startPoint.position().subtract(startPoint.normal().scale(0.01)));
                 Block hitBlock = level.getBlockState(hitBlockPos).getBlock();
 
+                // Usamos tu clase MaterialProperties para obtener la absorción
                 float absorption = MaterialProperties.getAbsorptionCoefficient(hitBlock);
-                reflectionAttenuation *= (1.0f - absorption); // La energía se multiplica por el factor de REFLEXIÓN
+                reflectionAttenuation *= (1.0f - absorption);
             }
 
-            // --- LÓGICA PARA DETENER EL RAYO ---
-            // Si la energía del rayo es casi nula, detenemos su procesamiento aquí mismo.
-            if (reflectionAttenuation < 0.01f) { // Umbral del 1% de energía
-                break; // Salimos del bucle 'for', el resto del camino es inaudible.
+            // 2. COMPROBAR si el rayo sigue "vivo" CON LA ENERGÍA YA ACTUALIZADA.
+            float distanceAttenuation = 1.0f / Math.max(1.0f, cumulativeDistance);
+            float totalAttenuation = reflectionAttenuation * distanceAttenuation;
+
+            // Si la atenuación total es demasiado alta, el rayo muere aquí y ahora.
+            if (totalAttenuation < 0.001f) {
+                // Le decimos al rayo que su simulación terminó en este punto.
+                ray.setMaxAudibleDistance(cumulativeDistance);
+                break; // Se detiene el bucle, no se procesa nada más para este rayo.
             }
 
+            // 3. PROCESAR las intersecciones solo si el rayo sigue vivo.
             findIntersection(level, start, end, playerPos, rightVec, lookVec, upVec, rightVec, RayImpulseCapture.Plane.YZ, cumulativeDistance, ray, currentTick, i, bounceCount, reflectionAttenuation);
             findIntersection(level, start, end, playerPos, upVec, lookVec, rightVec, rightVec, RayImpulseCapture.Plane.XZ, cumulativeDistance, ray, currentTick, i, bounceCount, reflectionAttenuation);
             findIntersection(level, start, end, playerPos, lookVec, upVec, rightVec, rightVec, RayImpulseCapture.Plane.XY, cumulativeDistance, ray, currentTick, i, bounceCount, reflectionAttenuation);
 
+            // 4. AVANZAR la distancia acumulada para la siguiente iteración.
             cumulativeDistance += (float) start.distanceTo(end);
         }
     }

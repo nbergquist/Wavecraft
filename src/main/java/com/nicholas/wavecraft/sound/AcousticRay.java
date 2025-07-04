@@ -31,6 +31,8 @@ public class AcousticRay {
     private long simulationExpireTick;  // cuándo dejar de calcular
     private long visualExpireTick;      // cuándo dejar de renderizar
 
+    private float maxAudibleDistance = Float.MAX_VALUE;
+
     private int lastCaptureBounceCount = -1;
 
     public AcousticRay(Vec3 origin, Vec3 direction, float propagationSpeed, long currentTick, ResourceLocation soundId, int maxBounces) {
@@ -64,6 +66,17 @@ public class AcousticRay {
 
     public void setLastCaptureBounceCount(int bounceCount) {
         this.lastCaptureBounceCount = bounceCount;
+    }
+
+    public float getMaxAudibleDistance() {
+        return this.maxAudibleDistance;
+    }
+
+    public void setMaxAudibleDistance(float distance) {
+        // Nos aseguramos de que solo se pueda acortar la distancia, nunca alargar.
+        if (distance < this.maxAudibleDistance) {
+            this.maxAudibleDistance = distance;
+        }
     }
 
     /**
@@ -146,20 +159,34 @@ public class AcousticRay {
             // --- INICIO DE SECCIÓN DE DEBUG ---
             if (currentTick % 5 == 0) { // Imprimir solo cada 5 ticks para no saturar la consola
                 float debugMaxDistance = getDistanceTraveled(currentTick);
-                /*System.out.println(
-                        "[DEBUG RENDER] Tick: " + currentTick +
-                                " | Rayo lanzado en: " + this.tickLaunched +
-                                " | Ticks transcurridos: " + (currentTick - this.tickLaunched) +
-                                " | Velocidad: " + this.propagationSpeed +
-                                " | MaxDist Calculada: " + String.format("%.2f", debugMaxDistance) +
-                                " | Puntos en Origen (Shader): " + this.instantRay.getPath().size()
-                );*/
+        /*System.out.println(
+                "[DEBUG RENDER] Tick: " + currentTick +
+                        " | Rayo lanzado en: " + this.tickLaunched +
+                        " | Ticks transcurridos: " + (currentTick - this.tickLaunched) +
+                        " | Velocidad: " + this.propagationSpeed +
+                        " | MaxDist Calculada: " + String.format("%.2f", debugMaxDistance) +
+                        " | Puntos en Origen (Shader): " + this.instantRay.getPath().size()
+        );*/
             }
             // --- FIN DE SECCIÓN DE DEBUG ---
 
 
-            // Lógica de propagación (la versión corregida que te pasé antes)
-            float maxDistance = getDistanceTraveled(currentTick);
+            // --- LÓGICA DE PROPAGACIÓN MODIFICADA ---
+
+            // 1. La distancia que el rayo *debería* recorrer según el tiempo transcurrido (animación).
+            float timeBasedDistance = getDistanceTraveled(currentTick);
+
+            // 2. El límite de distancia impuesto por la simulación de energía.
+            //    Accedemos al campo de la clase "padre" (AcousticRay) para obtener este valor.
+            float audibleDistanceLimit = AcousticRay.this.getMaxAudibleDistance();
+
+            // 3. La distancia final de renderizado es la más corta de las dos.
+            //    Esto asegura que el rayo no crezca visualmente más allá del punto
+            //    donde la simulación determinó que se volvió inaudible.
+            float maxDistance = Math.min(timeBasedDistance, audibleDistanceLimit);
+
+            // El resto de la lógica del método para construir el camino permanece igual,
+            // pero ahora usará la 'maxDistance' correcta.
             List<Vec3> src = instantRay.getPath();
             List<Vec3> dst = new ArrayList<>();
 
