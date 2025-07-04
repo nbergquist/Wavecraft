@@ -160,6 +160,18 @@ public class WavecraftCommand {
                                         })
                                 )
                         )
+                        .then(Commands.literal("toggleStereo")
+                                .executes(context -> {
+                                    // Invertir el valor del flag
+                                    SoundDebugger.binauralModeEnabled = !SoundDebugger.binauralModeEnabled;
+
+                                    // Enviar un mensaje de confirmación al jugador
+                                    String status = SoundDebugger.binauralModeEnabled ? "§aBINAURAL (Estéreo)" : "§cMONOAURAL";
+                                    context.getSource().sendSuccess(() -> Component.literal("Modo de audio cambiado a: " + status), true);
+
+                                    return 1; // Devuelve 1 para indicar éxito
+                                })
+                        )
         );
     }
 }

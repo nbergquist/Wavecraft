@@ -63,6 +63,8 @@ public class SoundDebugger {
     public static boolean renderCollisionPlanes = false;
     public static boolean renderTextureSlice = true;
 
+    public static boolean binauralModeEnabled = true; // Empezamos en estéreo por defecto
+
     public static float binauralMixFactor = 0.7f;
     public static float reflectionsMixFactor = 1f;
     public static float masterGain = 1;

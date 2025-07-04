@@ -107,7 +107,7 @@ public class AcousticRayManager {
                 AcousticRay ray = it.next();
                 if (!ray.isExpired(currentTick)) {
                     // 1. Procesar la trayectoria del rayo mientras esté activo
-                    checkRayPlaneIntersections(ray, player, level, currentTick);
+                    processRayPath(ray, player, level, currentTick);
                 } else {
                     // 2. El rayo terminó su simulación; manejar visualización y limpieza
                     if (renderRays && !ray.isVisualExpired(currentTick)) {
@@ -165,57 +165,132 @@ public class AcousticRayManager {
     }
 
     /**
-     * Comprueba cada segmento de un rayo contra los tres planos ortogonales del jugador.
-     * Si encuentra una intersección válida que no ha sido procesada, genera un impulso.
+     * Procesa la trayectoria de un rayo acústico, simulando su energía y generando los impulsos de audio para los oídos.
+     * <p>
+     * Su comportamiento se divide en dos modos controlados por {@link com.nicholas.wavecraft.debug.SoundDebugger#binauralModeEnabled}:
+     * <ul>
+     * <li><b>Modo Binaural (Estéreo):</b> Simula dos puntos de escucha (oídos) separados en la cabeza del jugador.
+     * Para cada rebote con línea de visión, calcula dos trayectorias distintas, una para cada oído. Esto genera
+     * impulsos con diferencias sutiles de tiempo (ITD) y volumen (ILD), creando un sonido espacial 3D realista.</li>
+     * <li><b>Modo Monoaural:</b> Simplifica la escucha a un único punto en el centro de la cabeza. Los ecos se
+     * calculan hacia este punto y se envían de forma idéntica a ambos canales para producir un sonido centrado.</li>
+     * </ul>
+     * <p>
+     * En ambos modos, el método gestiona el "camino directo" (sin rebotes) y las reflexiones, acumula la atenuación
+     * por distancia y absorción de materiales, y detiene la simulación si la energía del rayo cae por debajo de un
+     * umbral para optimizar el rendimiento.
+     *
+     * @param ray         El rayo acústico a procesar.
+     * @param player      La instancia del jugador para obtener su posición y orientación.
+     * @param level       El nivel actual para realizar las comprobaciones de línea de visión.
+     * @param currentTick El tick actual del juego para la sincronización de eventos.
      */
-    private void checkRayPlaneIntersections(AcousticRay ray, LocalPlayer player, Level level, long currentTick) {
+    private void processRayPath(AcousticRay ray, LocalPlayer player, Level level, long currentTick) {
         List<AcousticRay.PathPoint> path = ray.getInstantRay().getPathPoints();
         if (path.size() < 2) return;
 
-        Vec3 playerPos = player.getEyePosition();
-        Vec3 lookVec = player.getViewVector(1.0f);
-        Vec3 rightVec = lookVec.cross(new Vec3(0, 1, 0)).normalize();
-        Vec3 upVec = player.getUpVector(1.0f);
+        Vec3 playerEyePos = player.getEyePosition();
+        Vec3 rightVec = player.getViewVector(1.0f).cross(new Vec3(0, 1, 0)).normalize();
+        Vec3 sourcePos = ray.getInstantRay().getPathPoints().get(0).position();
 
+        // --- LÓGICA DE SELECCIÓN DE MODO ---
+        if (SoundDebugger.binauralModeEnabled) {
+            // --- MODO BINAURAL (ESTÉREO) ---
+            float headWidth = 0.5f; // Basado en la cabeza de 8x8 píxeles
+            Vec3 rightEarPos = playerEyePos.add(rightVec.scale(headWidth / 2.0f));
+            Vec3 leftEarPos = playerEyePos.subtract(rightVec.scale(headWidth / 2.0f));
+
+            // Camino directo
+            String directPathKey = ray.getSoundId().toString();
+            if (!directPathProcessed.contains(directPathKey)) {
+                directPathProcessed.add(directPathKey);
+                // Izquierdo
+                if (level.clip(new ClipContext(sourcePos, leftEarPos, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, null)).getType() == HitResult.Type.MISS) {
+                    double dist = sourcePos.distanceTo(leftEarPos);
+                    float time = (float)(dist / getSoundSpeed());
+                    float atten = 1.0f / (float)Math.max(1.0, dist);
+                    ConvolutionManager.addCapture(new RayImpulseCapture(ray.getSoundId(), sourcePos, dist, leftEarPos, dist, time, 0, atten, null, 1.0f, false), currentTick);
+                }
+                // Derecho
+                if (level.clip(new ClipContext(sourcePos, rightEarPos, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, null)).getType() == HitResult.Type.MISS) {
+                    double dist = sourcePos.distanceTo(rightEarPos);
+                    float time = (float)(dist / getSoundSpeed());
+                    float atten = 1.0f / (float)Math.max(1.0, dist);
+                    ConvolutionManager.addCapture(new RayImpulseCapture(ray.getSoundId(), sourcePos, dist, rightEarPos, dist, time, 0, atten, null, 1.0f, true), currentTick);
+                }
+            }
+        } else {
+            // --- MODO MONOAURAL (CENTRO DE LA CABEZA) ---
+            String directPathKey = ray.getSoundId().toString();
+            if (!directPathProcessed.contains(directPathKey)) {
+                directPathProcessed.add(directPathKey);
+                if (level.clip(new ClipContext(sourcePos, playerEyePos, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, null)).getType() == HitResult.Type.MISS) {
+                    double dist = sourcePos.distanceTo(playerEyePos);
+                    float time = (float)(dist / getSoundSpeed());
+                    float atten = 1.0f / (float)Math.max(1.0, dist);
+                    // Enviar dos impulsos idénticos, uno para cada canal
+                    ConvolutionManager.addCapture(new RayImpulseCapture(ray.getSoundId(), sourcePos, dist, playerEyePos, dist, time, 0, atten, null, 1.0f, false), currentTick);
+                    ConvolutionManager.addCapture(new RayImpulseCapture(ray.getSoundId(), sourcePos, dist, playerEyePos, dist, time, 0, atten, null, 1.0f, true), currentTick);
+                }
+            }
+        }
+
+        // --- Bucle de reflexiones (común para ambos, pero con el objetivo de trazado correcto) ---
         float cumulativeDistance = 0f;
         int bounceCount = 0;
-        float reflectionAttenuation = 1.0f; // La energía del rayo, empieza al 100%
+        float reflectionAttenuation = 1.0f;
 
         for (int i = 0; i < path.size() - 1; i++) {
             AcousticRay.PathPoint startPoint = path.get(i);
             Vec3 start = startPoint.position();
-            Vec3 end = path.get(i + 1).position();
 
-            // 1. ACTUALIZAR la energía si hubo un rebote al inicio de este segmento.
             if (i > 0 && startPoint.bounceStatus() == 2.0f) {
                 bounceCount++;
 
-                BlockPos hitBlockPos = BlockPos.containing(startPoint.position().subtract(startPoint.normal().scale(0.01)));
-                Block hitBlock = level.getBlockState(hitBlockPos).getBlock();
-
-                // Usamos tu clase MaterialProperties para obtener la absorción
-                float absorption = MaterialProperties.getAbsorptionCoefficient(hitBlock);
+                BlockPos hitBlockPos = BlockPos.containing(start.subtract(startPoint.normal().scale(0.01)));
+                float absorption = MaterialProperties.getAbsorptionCoefficient(level.getBlockState(hitBlockPos).getBlock());
                 reflectionAttenuation *= (1.0f - absorption);
+
+                // --- LÓGICA DE SELECCIÓN DE MODO DENTRO DEL BUCLE ---
+                if (SoundDebugger.binauralModeEnabled) {
+                    float headWidth = 0.5f;
+                    Vec3 rightEarPos = playerEyePos.add(rightVec.scale(headWidth / 2.0f));
+                    Vec3 leftEarPos = playerEyePos.subtract(rightVec.scale(headWidth / 2.0f));
+                    // Izquierdo
+                    if (level.clip(new ClipContext(start, leftEarPos, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, null)).getType() == HitResult.Type.MISS) {
+                        double dist = start.distanceTo(leftEarPos);
+                        double totalDist = cumulativeDistance + dist;
+                        float time = (float)(totalDist / getSoundSpeed());
+                        float atten = (1.0f / (float)Math.max(1.0, totalDist)) * reflectionAttenuation * SoundDebugger.reflectionsMixFactor;
+                        ConvolutionManager.addCapture(new RayImpulseCapture(ray.getSoundId(), sourcePos, totalDist, start, dist, time, bounceCount, atten, null, 1.0f, false), currentTick);
+                    }
+                    // Derecho
+                    if (level.clip(new ClipContext(start, rightEarPos, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, null)).getType() == HitResult.Type.MISS) {
+                        double dist = start.distanceTo(rightEarPos);
+                        double totalDist = cumulativeDistance + dist;
+                        float time = (float)(totalDist / getSoundSpeed());
+                        float atten = (1.0f / (float)Math.max(1.0, totalDist)) * reflectionAttenuation * SoundDebugger.reflectionsMixFactor;
+                        ConvolutionManager.addCapture(new RayImpulseCapture(ray.getSoundId(), sourcePos, totalDist, start, dist, time, bounceCount, atten, null, 1.0f, true), currentTick);
+                    }
+                } else {
+                    // Mono
+                    if (level.clip(new ClipContext(start, playerEyePos, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, null)).getType() == HitResult.Type.MISS) {
+                        double dist = start.distanceTo(playerEyePos);
+                        double totalDist = cumulativeDistance + dist;
+                        float time = (float)(totalDist / getSoundSpeed());
+                        float atten = (1.0f / (float)Math.max(1.0, totalDist)) * reflectionAttenuation * SoundDebugger.reflectionsMixFactor;
+                        ConvolutionManager.addCapture(new RayImpulseCapture(ray.getSoundId(), sourcePos, totalDist, start, dist, time, bounceCount, atten, null, 1.0f, false), currentTick);
+                        ConvolutionManager.addCapture(new RayImpulseCapture(ray.getSoundId(), sourcePos, totalDist, start, dist, time, bounceCount, atten, null, 1.0f, true), currentTick);
+                    }
+                }
             }
 
-            // 2. COMPROBAR si el rayo sigue "vivo" CON LA ENERGÍA YA ACTUALIZADA.
-            float distanceAttenuation = 1.0f / Math.max(1.0f, cumulativeDistance);
-            float totalAttenuation = reflectionAttenuation * distanceAttenuation;
+            cumulativeDistance += (float) start.distanceTo(path.get(i + 1).position());
 
-            // Si la atenuación total es demasiado alta, el rayo muere aquí y ahora.
-            if (totalAttenuation < 0.001f) {
-                // Le decimos al rayo que su simulación terminó en este punto.
+            if ((reflectionAttenuation * (1.0f / Math.max(1.0f, cumulativeDistance))) < 0.001f) {
                 ray.setMaxAudibleDistance(cumulativeDistance);
-                break; // Se detiene el bucle, no se procesa nada más para este rayo.
+                break;
             }
-
-            // 3. PROCESAR las intersecciones solo si el rayo sigue vivo.
-            findIntersection(level, start, end, playerPos, rightVec, lookVec, upVec, rightVec, RayImpulseCapture.Plane.YZ, cumulativeDistance, ray, currentTick, i, bounceCount, reflectionAttenuation);
-            findIntersection(level, start, end, playerPos, upVec, lookVec, rightVec, rightVec, RayImpulseCapture.Plane.XZ, cumulativeDistance, ray, currentTick, i, bounceCount, reflectionAttenuation);
-            findIntersection(level, start, end, playerPos, lookVec, upVec, rightVec, rightVec, RayImpulseCapture.Plane.XY, cumulativeDistance, ray, currentTick, i, bounceCount, reflectionAttenuation);
-
-            // 4. AVANZAR la distancia acumulada para la siguiente iteración.
-            cumulativeDistance += (float) start.distanceTo(end);
         }
     }
 
